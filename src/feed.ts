@@ -41,7 +41,13 @@ export function generateFeed(
     <itunes:author>${escapeXml(config.feed.author)}</itunes:author>
     <itunes:summary>${escapeXml(config.feed.description)}</itunes:summary>
     <itunes:explicit>no</itunes:explicit>
-    <itunes:category text="Technology" />
+    <itunes:category text="Technology" />${config.feed.image ? `
+    <itunes:image href="${escapeXml(config.feed.image)}" />
+    <image>
+      <url>${escapeXml(config.feed.image)}</url>
+      <title>${escapeXml(config.feed.title)}</title>
+      <link>${escapeXml(baseUrl)}</link>
+    </image>` : ""}
 ${items}
   </channel>
 </rss>`;

@@ -1,5 +1,5 @@
 import express from "express";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { writeFileSync, mkdirSync } from "node:fs";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
@@ -11,7 +11,7 @@ export function createServer(
     triggerRun: () => Promise<void>
 ) {
     const app = express();
-    const audioDir = join(config.data_dir, "audio");
+    const audioDir = resolve(join(config.data_dir, "audio"));
     const feedPath = join(config.data_dir, "feed.xml");
 
     // Ensure audio directory exists

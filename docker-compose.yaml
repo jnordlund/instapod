@@ -3,6 +3,8 @@ services:
     build: .
     ports:
       - "8080:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data
       - ./config.yaml:/data/config.yaml:ro

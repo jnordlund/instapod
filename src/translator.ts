@@ -103,6 +103,7 @@ async function callChatCompletions(
                     ],
                     temperature: 0.3,
                 }),
+                signal: AbortSignal.timeout(120_000), // 120s timeout
             });
 
             if (!response.ok) {
@@ -119,6 +120,8 @@ async function callChatCompletions(
             return data.choices[0].message.content.trim();
         } catch (err) {
             lastError = err as Error;
+            const cause = (err as any)?.cause;
+            console.error(`[translator] Attempt ${attempt + 1} failed: ${(err as Error).message}${cause ? ` (cause: ${cause.code ?? cause.message})` : ""}`);
             // Exponential backoff: 1s, 2s, 4s
             const delay = 1000 * Math.pow(2, attempt);
             await new Promise((r) => setTimeout(r, delay));

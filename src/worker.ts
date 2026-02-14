@@ -20,26 +20,17 @@ export async function runPipeline(
 
     console.log("[worker] Fetching bookmarks from Instapaper...");
 
-    // Resolve tag names → folder IDs if tags are configured
-    let bookmarks = await client.getBookmarks();
+    // Fetch bookmarks, filtered by tag if configured
+    let bookmarks;
 
     if (config.filters.tags.length > 0) {
-        const folders = await client.listFolders();
-        const tagFolderIds = new Set(
-            folders
-                .filter((f) =>
-                    config.filters.tags.some(
-                        (tag) => tag.toLowerCase() === f.title.toLowerCase()
-                    )
-                )
-                .map((f) => f.folder_id)
-        );
+        console.log(`[worker] Filtering for tags: ${JSON.stringify(config.filters.tags)}`);
 
-        // Fetch bookmarks from each matching folder
         const taggedBookmarks = [];
-        for (const folderId of tagFolderIds) {
-            const folderBookmarks = await client.getBookmarks(String(folderId));
-            taggedBookmarks.push(...folderBookmarks);
+        for (const tag of config.filters.tags) {
+            const tagBookmarks = await client.getBookmarks({ tag });
+            console.log(`[worker] Tag "${tag}": ${tagBookmarks.length} bookmark(s)`);
+            taggedBookmarks.push(...tagBookmarks);
         }
 
         // Deduplicate by bookmark_id
@@ -49,6 +40,8 @@ export async function runPipeline(
             seen.add(b.bookmark_id);
             return true;
         });
+    } else {
+        bookmarks = await client.getBookmarks();
     }
 
     // Filter out already-processed bookmarks

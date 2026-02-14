@@ -35,14 +35,15 @@ export class InstapaperClient {
         if (this.token) return;
 
         const url = `${BASE_URL}/api/1/oauth/access_token`;
-        const requestData = { url, method: "POST" as const };
-        const headers = this.oauth.toHeader(this.oauth.authorize(requestData));
-
-        const body = new URLSearchParams({
+        const data = {
             x_auth_username: this.config.username,
             x_auth_password: this.config.password,
             x_auth_mode: "client_auth",
-        });
+        };
+        const requestData = { url, method: "POST" as const, data };
+        const headers = this.oauth.toHeader(this.oauth.authorize(requestData));
+
+        const body = new URLSearchParams(data);
 
         const response = await fetch(url, {
             method: "POST",
@@ -68,14 +69,22 @@ export class InstapaperClient {
     }
 
     /**
-     * Get bookmarks, optionally filtered by folder_id.
+     * Get bookmarks, optionally filtered by folder_id or tag.
+     * Note: tag is only used if folder_id is NOT specified.
      */
-    async getBookmarks(folderId?: string): Promise<InstapaperBookmark[]> {
+    async getBookmarks(options?: {
+        folderId?: string;
+        tag?: string;
+    }): Promise<InstapaperBookmark[]> {
         await this.authenticate();
 
         const url = `${BASE_URL}/api/1/bookmarks/list`;
         const params: Record<string, string> = { limit: "500" };
-        if (folderId) params.folder_id = folderId;
+        if (options?.folderId) {
+            params.folder_id = options.folderId;
+        } else if (options?.tag) {
+            params.tag = options.tag;
+        }
 
         const response = await this.authedRequest(url, params);
         const data = (await response.json()) as Array<
@@ -114,7 +123,11 @@ export class InstapaperClient {
         url: string,
         params?: Record<string, string>
     ): Promise<Response> {
-        const requestData = { url, method: "POST" as const };
+        const requestData = {
+            url,
+            method: "POST" as const,
+            data: params ?? {},
+        };
         const tokenData = this.token
             ? { key: this.token.token, secret: this.token.tokenSecret }
             : undefined;

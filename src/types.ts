@@ -39,6 +39,7 @@ export interface FeedConfig {
     description: string;
     language: string;
     author: string;
+    image?: string;
 }
 
 export interface AppConfig {

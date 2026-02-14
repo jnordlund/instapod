@@ -1,11 +1,14 @@
-import { EdgeTTS } from "@andresaya/edge-tts";
-import { writeFile, stat } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { spawn } from "node:child_process";
+import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { TtsConfig } from "./types.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+
 /**
- * Synthesize text to an mp3 file using edge-tts.
+ * Synthesize text to an mp3 file using edge-tts in a child process.
+ * This prevents TTS from blocking the main event loop (Express).
  * Returns the duration in seconds.
  */
 export async function synthesize(
@@ -15,18 +18,49 @@ export async function synthesize(
 ): Promise<number> {
     mkdirSync(dirname(outputPath), { recursive: true });
 
-    const tts = new EdgeTTS();
-    await tts.synthesize(text, config.voice, {
-        rate: config.rate,
-        pitch: config.pitch,
+    const workerPath = join(__dirname, "tts-worker.js");
+
+    return new Promise<number>((resolve, reject) => {
+        const child = spawn("node", [workerPath], {
+            stdio: ["pipe", "pipe", "inherit"],
+        });
+
+        let stdout = "";
+
+        child.stdout!.on("data", (data: Buffer) => {
+            stdout += data.toString();
+        });
+
+        child.on("error", (err) => {
+            reject(new Error(`TTS worker error: ${err.message}`));
+        });
+
+        child.on("close", (code) => {
+            if (code !== 0) {
+                reject(new Error(`TTS worker exited with code ${code}`));
+                return;
+            }
+
+            try {
+                const result = JSON.parse(stdout);
+                const estimatedDuration = Math.round(result.size / 16000);
+                resolve(estimatedDuration);
+            } catch {
+                reject(new Error(`TTS worker returned invalid output: ${stdout}`));
+            }
+        });
+
+        // Send input via stdin
+        const input = JSON.stringify({
+            text,
+            outputPath,
+            voice: config.voice,
+            rate: config.rate,
+            pitch: config.pitch,
+        });
+        child.stdin!.write(input);
+        child.stdin!.end();
     });
-    await tts.toFile(outputPath);
-
-    // Estimate duration from file size (mp3 at ~128kbps ≈ 16 KB/s)
-    const fileInfo = await stat(outputPath);
-    const estimatedDuration = Math.round(fileInfo.size / 16000);
-
-    return estimatedDuration;
 }
 
 /**
@@ -34,8 +68,10 @@ export async function synthesize(
  */
 export function generateFilename(bookmarkId: string, title: string): string {
     const safe = title
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "") // strip diacritics
         .toLowerCase()
-        .replace(/[^a-z0-9åäöü]+/g, "-")
+        .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "")
         .slice(0, 60);
 

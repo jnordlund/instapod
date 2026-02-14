@@ -45,12 +45,15 @@ export class StateManager {
     }
 
     getProcessedBookmarks(): ProcessedBookmark[] {
+        // Re-read from disk (pipeline may have written new entries from a child process)
+        this.state = this.load();
         return Object.values(this.state.processedBookmarks).sort(
             (a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime()
         );
     }
 
     getLastRun(): string | null {
+        this.state = this.load();
         return this.state.lastRun;
     }
 
