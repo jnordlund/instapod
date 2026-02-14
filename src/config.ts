@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import yaml from "js-yaml";
 import type { AppConfig } from "./types.js";
@@ -75,6 +75,13 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "feed.description": "Artiklar upplästa som podcast",
     "feed.language": "sv",
     "feed.author": "Instapod",
+    "admin.allowed_cidrs": [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "::1/128",
+    ],
     "data_dir": "/data",
 };
 
@@ -133,4 +140,18 @@ export function loadConfig(configPath?: string): AppConfig {
     validate(raw);
 
     return raw as unknown as AppConfig;
+}
+
+/**
+ * Save config back to the YAML file on disk.
+ */
+export function saveConfig(config: AppConfig, configPath?: string): void {
+    const filePath = configPath ?? process.env.CONFIG_PATH ?? "config.yaml";
+    const resolved = resolve(filePath);
+    const yamlStr = yaml.dump(config as unknown as Record<string, unknown>, {
+        lineWidth: -1,
+        quotingType: '"',
+        forceQuotes: false,
+    });
+    writeFileSync(resolved, yamlStr, "utf-8");
 }

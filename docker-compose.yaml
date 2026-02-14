@@ -7,7 +7,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data
-      - ./config.yaml:/data/config.yaml:ro
+      - ./config.yaml:/data/config.yaml
     environment:
       - CONFIG_PATH=/data/config.yaml
     restart: unless-stopped

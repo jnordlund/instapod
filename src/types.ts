@@ -42,6 +42,12 @@ export interface FeedConfig {
     image?: string;
 }
 
+export interface AdminConfig {
+    password?: string;
+    allowed_cidrs?: string[];
+    session_secret?: string;
+}
+
 export interface AppConfig {
     instapaper: InstapaperConfig;
     filters: FilterConfig;
@@ -50,6 +56,7 @@ export interface AppConfig {
     schedule: ScheduleConfig;
     server: ServerConfig;
     feed: FeedConfig;
+    admin?: AdminConfig;
     data_dir: string;
 }
 
