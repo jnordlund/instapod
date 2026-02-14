@@ -1,0 +1,7 @@
+node_modules/
+dist/
+data/
+config.yaml
+*.mp3
+state.json
+.env

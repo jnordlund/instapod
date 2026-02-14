@@ -1,0 +1,36 @@
+# config.yaml — Instapod configuration
+instapaper:
+  consumer_key: "YOUR_CONSUMER_KEY"
+  consumer_secret: "YOUR_CONSUMER_SECRET"
+  username: "your@email.com"
+  password: "your-password"
+
+filters:
+  tags: []  # empty = all articles, e.g. ["tech", "longread"]
+
+translation:
+  api_base: "https://api.openai.com/v1"
+  api_key: "sk-..."
+  model: "gpt-4o-mini"
+  target_language: "svenska"
+  skip_if_same: true
+
+tts:
+  voice: "sv-SE-SofieNeural"
+  rate: "+0%"
+  pitch: "+0Hz"
+
+schedule:
+  cron: "*/30 * * * *"  # every 30 minutes
+
+server:
+  port: 8080
+  base_url: "https://pod.example.com"
+
+feed:
+  title: "Mina Artiklar"
+  description: "Artiklar från Instapaper, upplästa"
+  language: "sv"
+  author: "Jonas"
+
+data_dir: "/data"

@@ -1,0 +1,11 @@
+services:
+  instapod:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+      - ./config.yaml:/data/config.yaml:ro
+    environment:
+      - CONFIG_PATH=/data/config.yaml
+    restart: unless-stopped
