@@ -322,6 +322,11 @@ header h1 {
 .form-group input:focus, .form-group select:focus {
   border-color: var(--accent);
 }
+.form-help {
+  margin-top: 4px;
+  font-size: 0.75rem;
+  color: var(--text2);
+}
 
 /* Episode list */
 .episode-list { list-style: none; }
@@ -558,9 +563,26 @@ header h1 {
     <div class="card">
       <h2><span class="icon">⏰</span> Schedule</h2>
       <div class="form-grid">
+        <div class="form-group">
+          <label>Run Frequency</label>
+          <select id="cfg-schedule-preset" onchange="onSchedulePresetChange()">
+            <option value="*/5 * * * *">Every 5 minutes</option>
+            <option value="*/15 * * * *">Every 15 minutes</option>
+            <option value="*/30 * * * *">Every 30 minutes</option>
+            <option value="0 * * * *">Every hour</option>
+            <option value="0 */6 * * *">Every 6 hours</option>
+            <option value="daily">Daily (choose time)</option>
+            <option value="custom">Custom cron</option>
+          </select>
+        </div>
+        <div class="form-group" id="cfg-schedule-daily-group" style="display:none;">
+          <label>Daily Time</label>
+          <input type="time" id="cfg-schedule-daily-time" value="08:00" onchange="onSchedulePresetChange()">
+        </div>
         <div class="form-group full">
-          <label>Cron Expression</label>
-          <input type="text" id="cfg-schedule-cron" placeholder="*/30 * * * *">
+          <label>Cron Expression (Advanced)</label>
+          <input type="text" id="cfg-schedule-cron" placeholder="*/30 * * * *" oninput="onScheduleCronInput()">
+          <div class="form-help" id="cfg-schedule-help">Choose a frequency above, or use custom cron.</div>
         </div>
       </div>
     </div>
@@ -770,6 +792,113 @@ async function loadConfig() {
   }
 }
 
+const FIXED_SCHEDULE_PRESETS = [
+  '*/5 * * * *',
+  '*/15 * * * *',
+  '*/30 * * * *',
+  '0 * * * *',
+  '0 */6 * * *',
+];
+
+function cronFromDailyTime(timeValue) {
+  const parts = String(timeValue || '08:00').split(':');
+  const rawHour = Number.parseInt(parts[0], 10);
+  const rawMinute = Number.parseInt(parts[1], 10);
+  const hour = Number.isFinite(rawHour) ? Math.min(23, Math.max(0, rawHour)) : 8;
+  const minute = Number.isFinite(rawMinute) ? Math.min(59, Math.max(0, rawMinute)) : 0;
+  return String(minute) + ' ' + String(hour) + ' * * *';
+}
+
+function parseDailyCron(cronExpr) {
+  const match = String(cronExpr || '').trim().match(/^([0-5]?\\d)\\s+([01]?\\d|2[0-3])\\s+\\*\\s+\\*\\s+\\*$/);
+  if (!match) return null;
+  const minute = Number.parseInt(match[1], 10);
+  const hour = Number.parseInt(match[2], 10);
+  return String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
+}
+
+function getSchedulePresetHint(preset) {
+  switch (preset) {
+    case '*/5 * * * *':
+      return 'Runs every 5 minutes.';
+    case '*/15 * * * *':
+      return 'Runs every 15 minutes.';
+    case '*/30 * * * *':
+      return 'Runs every 30 minutes.';
+    case '0 * * * *':
+      return 'Runs every hour on the hour.';
+    case '0 */6 * * *':
+      return 'Runs every 6 hours.';
+    case 'daily':
+      return 'Runs once per day at the selected time.';
+    default:
+      return 'Custom cron mode. Example: */30 * * * *';
+  }
+}
+
+function onSchedulePresetChange() {
+  const preset = getValue('cfg-schedule-preset');
+  const cronEl = document.getElementById('cfg-schedule-cron');
+  const dailyGroup = document.getElementById('cfg-schedule-daily-group');
+  const helpEl = document.getElementById('cfg-schedule-help');
+  if (!cronEl || !dailyGroup || !helpEl) return;
+
+  if (preset === 'custom') {
+    dailyGroup.style.display = 'none';
+    cronEl.readOnly = false;
+    helpEl.textContent = getSchedulePresetHint(preset);
+    return;
+  }
+
+  cronEl.readOnly = true;
+
+  if (preset === 'daily') {
+    dailyGroup.style.display = '';
+    cronEl.value = cronFromDailyTime(getValue('cfg-schedule-daily-time'));
+    helpEl.textContent = getSchedulePresetHint(preset);
+    return;
+  }
+
+  dailyGroup.style.display = 'none';
+  cronEl.value = preset;
+  helpEl.textContent = getSchedulePresetHint(preset);
+}
+
+function onScheduleCronInput() {
+  const presetEl = document.getElementById('cfg-schedule-preset');
+  if (!presetEl) return;
+  if (presetEl.value !== 'custom') {
+    presetEl.value = 'custom';
+    onSchedulePresetChange();
+  }
+}
+
+function syncScheduleUiFromCron(cronExpr) {
+  const normalized = String(cronExpr || '').trim() || '*/30 * * * *';
+  setValue('cfg-schedule-cron', normalized);
+
+  const presetEl = document.getElementById('cfg-schedule-preset');
+  if (!presetEl) return;
+
+  if (FIXED_SCHEDULE_PRESETS.includes(normalized)) {
+    presetEl.value = normalized;
+    onSchedulePresetChange();
+    return;
+  }
+
+  const dailyTime = parseDailyCron(normalized);
+  if (dailyTime) {
+    presetEl.value = 'daily';
+    setValue('cfg-schedule-daily-time', dailyTime);
+    onSchedulePresetChange();
+    return;
+  }
+
+  presetEl.value = 'custom';
+  onSchedulePresetChange();
+  setValue('cfg-schedule-cron', normalized);
+}
+
 function populateForm(c) {
   setValue('cfg-instapaper-username', c.instapaper?.username);
   setValue('cfg-instapaper-password', c.instapaper?.password);
@@ -783,7 +912,7 @@ function populateForm(c) {
   setValue('cfg-tts-voice', c.tts?.voice);
   setValue('cfg-tts-rate', c.tts?.rate);
   setValue('cfg-tts-pitch', c.tts?.pitch);
-  setValue('cfg-schedule-cron', c.schedule?.cron);
+  syncScheduleUiFromCron(c.schedule?.cron);
   setValue('cfg-server-port', c.server?.port);
   setValue('cfg-server-base_url', c.server?.base_url);
   setValue('cfg-feed-title', c.feed?.title);
@@ -814,6 +943,8 @@ async function saveConfigForm() {
     .split(',')
     .map(t => t.trim())
     .filter(Boolean);
+  onSchedulePresetChange();
+  const cronExpr = getValue('cfg-schedule-cron').trim() || '*/30 * * * *';
 
   const update = {
     instapaper: {
@@ -835,7 +966,7 @@ async function saveConfigForm() {
       rate: getValue('cfg-tts-rate'),
       pitch: getValue('cfg-tts-pitch'),
     },
-    schedule: { cron: getValue('cfg-schedule-cron') },
+    schedule: { cron: cronExpr },
     server: {
       port: parseInt(getValue('cfg-server-port'), 10) || 8080,
       base_url: getValue('cfg-server-base_url'),
