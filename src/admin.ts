@@ -5,6 +5,10 @@ import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
 import { saveConfig } from "./config.js";
 import {
+  DEFAULT_TEXT_PROMPT_TEMPLATE,
+  DEFAULT_TITLE_PROMPT_TEMPLATE,
+} from "./translation-prompts.js";
+import {
   createIpFilter,
   createAuthGuard,
   handleLogin,
@@ -165,6 +169,9 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
 // ── HTML Template ──
 
 function renderAdminPage(): string {
+  const defaultTitlePromptJs = JSON.stringify(DEFAULT_TITLE_PROMPT_TEMPLATE);
+  const defaultTextPromptJs = JSON.stringify(DEFAULT_TEXT_PROMPT_TEMPLATE);
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -308,7 +315,7 @@ header h1 {
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-.form-group input, .form-group select {
+.form-group input, .form-group select, .form-group textarea {
   padding: 9px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -319,7 +326,7 @@ header h1 {
   outline: none;
   transition: border-color 0.15s;
 }
-.form-group input:focus, .form-group select:focus {
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus {
   border-color: var(--accent);
 }
 .form-help {
@@ -536,6 +543,18 @@ header h1 {
         <div class="form-group">
           <label>Target Language</label>
           <input type="text" id="cfg-translation-target_language">
+        </div>
+        <div class="form-group full">
+          <label>Title Prompt</label>
+          <textarea id="cfg-translation-title_prompt" rows="3"></textarea>
+        </div>
+        <div class="form-group full">
+          <label>Text Prompt</label>
+          <textarea id="cfg-translation-text_prompt" rows="5"></textarea>
+          <div class="form-help">Use <code>{{target_language}}</code> to insert the selected target language.</div>
+        </div>
+        <div class="form-group full" style="align-items:flex-start;">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="resetTranslationPrompts()">Reset prompts to default</button>
         </div>
       </div>
     </div>
@@ -792,6 +811,15 @@ async function loadConfig() {
   }
 }
 
+const DEFAULT_TITLE_PROMPT = ${defaultTitlePromptJs};
+const DEFAULT_TEXT_PROMPT = ${defaultTextPromptJs};
+
+function resetTranslationPrompts() {
+  setValue('cfg-translation-title_prompt', DEFAULT_TITLE_PROMPT);
+  setValue('cfg-translation-text_prompt', DEFAULT_TEXT_PROMPT);
+  showToast('Prompts reset to defaults (not yet saved)');
+}
+
 const FIXED_SCHEDULE_PRESETS = [
   '*/5 * * * *',
   '*/15 * * * *',
@@ -909,6 +937,8 @@ function populateForm(c) {
   setValue('cfg-translation-api_key', c.translation?.api_key);
   setValue('cfg-translation-model', c.translation?.model);
   setValue('cfg-translation-target_language', c.translation?.target_language);
+  setValue('cfg-translation-title_prompt', c.translation?.title_prompt ?? DEFAULT_TITLE_PROMPT);
+  setValue('cfg-translation-text_prompt', c.translation?.text_prompt ?? DEFAULT_TEXT_PROMPT);
   setValue('cfg-tts-voice', c.tts?.voice);
   setValue('cfg-tts-rate', c.tts?.rate);
   setValue('cfg-tts-pitch', c.tts?.pitch);
@@ -960,6 +990,8 @@ async function saveConfigForm() {
       model: getValue('cfg-translation-model'),
       target_language: getValue('cfg-translation-target_language'),
       skip_if_same: currentConfig?.translation?.skip_if_same ?? true,
+      title_prompt: getValue('cfg-translation-title_prompt'),
+      text_prompt: getValue('cfg-translation-text_prompt'),
     },
     tts: {
       voice: getValue('cfg-tts-voice'),

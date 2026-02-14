@@ -1,5 +1,10 @@
 import { franc } from "franc-min";
 import type { TranslationConfig } from "./types.js";
+import {
+    DEFAULT_TEXT_PROMPT_TEMPLATE,
+    DEFAULT_TITLE_PROMPT_TEMPLATE,
+    resolveTranslationPrompt,
+} from "./translation-prompts.js";
 
 /** ISO‑639‑3 codes for common target language names. */
 const LANG_NAME_TO_CODE: Record<string, string> = {
@@ -79,9 +84,11 @@ async function callChatCompletions(
     config: TranslationConfig,
     isTitle = false
 ): Promise<string> {
-    const systemPrompt = isTitle
-        ? `You are a translator. Translate the following title to ${config.target_language}. Return only the translated title, nothing else.`
-        : `You are a translator. Translate the following text to ${config.target_language}. Preserve paragraph breaks. Return only the translated text, nothing else.`;
+    const systemPrompt = resolveTranslationPrompt(
+        isTitle ? config.title_prompt : config.text_prompt,
+        config.target_language,
+        isTitle ? DEFAULT_TITLE_PROMPT_TEMPLATE : DEFAULT_TEXT_PROMPT_TEMPLATE
+    );
 
     const url = `${config.api_base.replace(/\/$/, "")}/chat/completions`;
 

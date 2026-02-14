@@ -51,6 +51,8 @@ server:
         expect(config.server.port).toBe(8080);
         expect(config.schedule.cron).toBe("*/30 * * * *");
         expect(config.translation.model).toBe("gpt-4o-mini");
+        expect(config.translation.title_prompt).toContain("{{target_language}}");
+        expect(config.translation.text_prompt).toContain("{{target_language}}");
     });
 
     it("throws on missing required fields", () => {
