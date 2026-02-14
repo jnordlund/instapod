@@ -61,4 +61,14 @@ export class StateManager {
         this.state.lastRun = new Date().toISOString();
         this.save();
     }
+
+    removeProcessed(bookmarkId: string): boolean {
+        this.state = this.load();
+        if (bookmarkId in this.state.processedBookmarks) {
+            delete this.state.processedBookmarks[bookmarkId];
+            this.save();
+            return true;
+        }
+        return false;
+    }
 }
