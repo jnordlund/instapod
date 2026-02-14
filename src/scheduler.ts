@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { addLog } from "./logs.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -15,9 +16,58 @@ function spawnPipeline(): Promise<void> {
     return new Promise((resolve, reject) => {
         const runner = join(__dirname, "pipeline-runner.js");
         const child = spawn("node", [runner], {
-            stdio: "inherit",                        // logs go to parent's stdout/stderr
+            stdio: ["ignore", "pipe", "pipe"],      // capture child logs for admin log view
             env: { ...process.env },                 // inherit env (CONFIG_PATH etc.)
         });
+
+        const attachStream = (
+            stream: NodeJS.ReadableStream | null,
+            write: (chunk: string) => void,
+            source: string,
+            level: "info" | "error"
+        ) => {
+            if (!stream) return;
+            let buffer = "";
+
+            stream.on("data", (chunk: Buffer | string) => {
+                const text = typeof chunk === "string"
+                    ? chunk
+                    : chunk.toString("utf-8");
+
+                write(text);
+                buffer += text;
+
+                let newlineIndex = buffer.indexOf("\n");
+                while (newlineIndex >= 0) {
+                    const line = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+                    if (line.trim().length > 0) {
+                        addLog(level, line, source);
+                    }
+                    buffer = buffer.slice(newlineIndex + 1);
+                    newlineIndex = buffer.indexOf("\n");
+                }
+            });
+
+            stream.on("end", () => {
+                const line = buffer.replace(/\r$/, "").trim();
+                if (line.length > 0) {
+                    addLog(level, line, source);
+                }
+            });
+        };
+
+        attachStream(
+            child.stdout,
+            (chunk) => process.stdout.write(chunk),
+            "pipeline",
+            "info"
+        );
+        attachStream(
+            child.stderr,
+            (chunk) => process.stderr.write(chunk),
+            "pipeline",
+            "error"
+        );
 
         child.on("error", (err) => {
             reject(new Error(`Pipeline spawn error: ${err.message}`));

@@ -2,6 +2,9 @@ import { loadConfig } from "./config.js";
 import { StateManager } from "./state.js";
 import { createServer } from "./server.js";
 import { startScheduler, triggerManualRun } from "./scheduler.js";
+import { installConsoleLogCapture } from "./logs.js";
+
+installConsoleLogCapture();
 
 async function main() {
     console.log("🎙️  Instapod starting...");

@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
 import { saveConfig } from "./config.js";
+import { getLogs } from "./logs.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -136,6 +137,31 @@ export function createAdminRouter(
       episodeCount: episodes.length,
       lastRun: state.getLastRun(),
     });
+  });
+
+  // ── API: Logs ──
+  router.get("/api/logs", (req, res) => {
+    const rawLimit = Array.isArray(req.query.limit)
+      ? req.query.limit[0]
+      : req.query.limit;
+    const parsedLimit = Number.parseInt(
+      typeof rawLimit === "string" ? rawLimit : "200",
+      10
+    );
+    const limit = Number.isNaN(parsedLimit)
+      ? 200
+      : Math.min(1000, Math.max(1, parsedLimit));
+
+    const rawSince = Array.isArray(req.query.since)
+      ? req.query.since[0]
+      : req.query.since;
+    const parsedSince = Number.parseInt(
+      typeof rawSince === "string" ? rawSince : "",
+      10
+    );
+    const sinceId = Number.isNaN(parsedSince) ? undefined : parsedSince;
+
+    res.json({ logs: getLogs({ limit, sinceId }) });
   });
 
   // ── API: Trigger pipeline ──
@@ -423,6 +449,34 @@ header h1 {
 .tab-content { display: none; }
 .tab-content.active { display: block; }
 
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.log-viewer {
+  margin: 0;
+  padding: 12px;
+  min-height: 220px;
+  max-height: 480px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-meta {
+  color: var(--text2);
+  font-size: 0.78rem;
+}
+
 .spinner {
   display: inline-block;
   width: 14px;
@@ -475,6 +529,7 @@ header h1 {
   <div class="tabs">
     <div class="tab active" onclick="switchTab('episodes')">Episodes</div>
     <div class="tab" onclick="switchTab('config')">Configuration</div>
+    <div class="tab" onclick="switchTab('logs')">Logs</div>
   </div>
 
   <!-- Episodes tab -->
@@ -484,6 +539,24 @@ header h1 {
       <ul class="episode-list" id="episodeList">
         <li class="empty-state">Loading...</li>
       </ul>
+    </div>
+  </div>
+
+  <!-- Logs tab -->
+  <div class="tab-content" id="tab-logs">
+    <div class="card">
+      <h2><span class="icon">📜</span> Logs</h2>
+      <div class="log-toolbar">
+        <div class="log-meta" id="logsMeta">Loading...</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <label style="display:flex;align-items:center;gap:6px;color:var(--text2);font-size:0.8rem;">
+            <input type="checkbox" id="logs-auto-refresh" checked>
+            Auto refresh
+          </label>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="loadLogs(true)">Refresh</button>
+        </div>
+      </div>
+      <pre class="log-viewer" id="logViewer">Loading logs...</pre>
     </div>
   </div>
 
@@ -668,6 +741,8 @@ header h1 {
 <script>
 // ── State ──
 let currentConfig = null;
+let logEntries = [];
+let latestLogId = 0;
 
 // ── Tab switching ──
 function switchTab(name) {
@@ -677,6 +752,9 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(tc => {
     tc.classList.toggle('active', tc.id === 'tab-' + name);
   });
+  if (name === 'logs') {
+    loadLogs(true);
+  }
 }
 
 // ── Toast notifications ──
@@ -703,6 +781,13 @@ function formatDate(iso) {
   if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
   if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
   return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatLogTimestamp(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour12: false });
 }
 
 // ── API calls ──
@@ -752,6 +837,65 @@ async function loadEpisodes() {
     \`).join('');
   } catch (e) {
     console.error('Failed to load episodes:', e);
+  }
+}
+
+function renderLogs() {
+  const viewer = document.getElementById('logViewer');
+  const meta = document.getElementById('logsMeta');
+  if (!viewer || !meta) return;
+
+  if (logEntries.length === 0) {
+    viewer.textContent = 'No logs yet.';
+    meta.textContent = '0 entries';
+    return;
+  }
+
+  viewer.textContent = logEntries.map((entry) => {
+    const timestamp = formatLogTimestamp(entry.timestamp);
+    const level = String(entry.level || 'info').toUpperCase().padEnd(5, ' ');
+    const source = entry.source ? '[' + entry.source + ']' : '';
+    const message = String(entry.message || '');
+    return '[' + timestamp + '] ' + level + ' ' + source + ' ' + message;
+  }).join('\\n');
+
+  meta.textContent = logEntries.length + ' entries';
+
+  const autoRefresh = document.getElementById('logs-auto-refresh');
+  if (autoRefresh && autoRefresh.checked) {
+    viewer.scrollTop = viewer.scrollHeight;
+  }
+}
+
+async function loadLogs(forceFull = false) {
+  try {
+    const sinceParam = !forceFull && latestLogId > 0
+      ? '&since=' + encodeURIComponent(String(latestLogId))
+      : '';
+    const r = await apiFetch('/api/logs?limit=400' + sinceParam);
+    const data = await r.json();
+    const incoming = Array.isArray(data.logs) ? data.logs : [];
+
+    if (forceFull || latestLogId === 0) {
+      logEntries = incoming;
+    } else if (incoming.length > 0) {
+      logEntries = logEntries.concat(incoming);
+      if (logEntries.length > 800) {
+        logEntries = logEntries.slice(logEntries.length - 800);
+      }
+    }
+
+    if (incoming.length > 0) {
+      latestLogId = incoming[incoming.length - 1].id;
+    } else if (forceFull && logEntries.length > 0) {
+      latestLogId = logEntries[logEntries.length - 1].id;
+    }
+
+    renderLogs();
+  } catch (e) {
+    if (e.message !== 'auth') {
+      console.error('Failed to load logs:', e);
+    }
   }
 }
 
@@ -1047,8 +1191,20 @@ async function doLogout() {
 // ── Init ──
 loadStatus();
 loadEpisodes();
+loadLogs(true);
 loadConfig();
 setInterval(loadStatus, 30000);
+setInterval(() => {
+  const logsTab = document.getElementById('tab-logs');
+  const autoRefresh = document.getElementById('logs-auto-refresh');
+  if (
+    logsTab &&
+    logsTab.classList.contains('active') &&
+    (!autoRefresh || autoRefresh.checked)
+  ) {
+    loadLogs();
+  }
+}, 5000);
 </script>
 </body>
 </html>`;
