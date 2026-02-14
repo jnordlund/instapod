@@ -14,6 +14,8 @@ translation:
   model: "gpt-4o-mini"
   target_language: "svenska"
   skip_if_same: true
+  title_prompt: "You are a translator. Translate the following title to {{target_language}}. Return only the translated title, nothing else."
+  text_prompt: "You are a translator. Translate the following text to {{target_language}}. Preserve paragraph breaks. Return only the translated text, nothing else."
 
 tts:
   voice: "sv-SE-SofieNeural"

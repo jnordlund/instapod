@@ -17,6 +17,8 @@ export interface TranslationConfig {
     model: string;
     target_language: string;
     skip_if_same: boolean;
+    title_prompt: string;
+    text_prompt: string;
 }
 
 export interface TtsConfig {

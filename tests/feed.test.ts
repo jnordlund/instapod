@@ -16,6 +16,8 @@ const mockConfig: AppConfig = {
         model: "",
         target_language: "svenska",
         skip_if_same: true,
+        title_prompt: "",
+        text_prompt: "",
     },
     tts: { voice: "sv-SE-SofieNeural", rate: "+0%", pitch: "+0Hz" },
     schedule: { cron: "*/30 * * * *" },

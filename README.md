@@ -121,7 +121,7 @@ See [`config.example.yaml`](config.example.yaml) for all options:
 | `instapaper` | `consumer_key`, `consumer_secret`, `username`, `password` | Instapaper API credentials |
 | `filters` | `tags` | Only process articles with these tags (empty = all) |
 | `translation` | `api_base`, `api_key`, `model` | OpenAI-compatible translation API |
-| `translation` | `target_language`, `skip_if_same` | Target language and skip if already correct |
+| `translation` | `target_language`, `skip_if_same`, `title_prompt`, `text_prompt` | Target language, language-skip, and translation prompt templates |
 | `tts` | `voice`, `rate`, `pitch` | Edge TTS voice settings |
 | `schedule` | `cron` | How often to check for new articles |
 | `server` | `port`, `base_url` | HTTP server port and public URL for feed links |
@@ -154,7 +154,11 @@ translation:
   model: "gpt-4o-mini"                    # Model name as the API expects it
   target_language: "svenska"
   skip_if_same: true                      # Skip translation if already in target language
+  title_prompt: "You are a translator. Translate the following title to {{target_language}}. Return only the translated title, nothing else."
+  text_prompt: "You are a translator. Translate the following text to {{target_language}}. Preserve paragraph breaks. Return only the translated text, nothing else."
 ```
+
+`{{target_language}}` is replaced with the current `target_language` value before sending prompts to the API.
 
 > **Self-hosting tip:** If you want to proxy your existing ChatGPT, Claude, or Gemini subscriptions as an OpenAI-compatible API, check out [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It wraps multiple AI providers behind a single `/v1/chat/completions` endpoint with OAuth support and load balancing.
 

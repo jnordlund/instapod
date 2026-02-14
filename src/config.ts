@@ -2,6 +2,10 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import yaml from "js-yaml";
 import type { AppConfig } from "./types.js";
+import {
+    DEFAULT_TEXT_PROMPT_TEMPLATE,
+    DEFAULT_TITLE_PROMPT_TEMPLATE,
+} from "./translation-prompts.js";
 
 const REQUIRED_FIELDS = [
     "instapaper.consumer_key",
@@ -66,6 +70,8 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "translation.model": "gpt-4o-mini",
     "translation.target_language": "svenska",
     "translation.skip_if_same": true,
+    "translation.title_prompt": DEFAULT_TITLE_PROMPT_TEMPLATE,
+    "translation.text_prompt": DEFAULT_TEXT_PROMPT_TEMPLATE,
     "tts.voice": "sv-SE-SofieNeural",
     "tts.rate": "+0%",
     "tts.pitch": "+0Hz",
