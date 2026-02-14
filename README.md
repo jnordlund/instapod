@@ -49,7 +49,7 @@ Configure which tags to watch in `config.yaml`:
 
 ```yaml
 filters:
-  tags: ["pod"]  # Articles tagged "podd" become episodes
+  tags: ["pod"]  # Articles tagged "pod" become episodes
 ```
 
 - Use **one or more tags** — articles matching any tag are included
@@ -64,7 +64,7 @@ The feed must be reachable from the internet for podcast apps to fetch it. A few
 
 ### Reverse proxy (recommended)
 
-Use Nginx, Caddy, or Traefik to proxy requests to Instapod:
+Use Nginx, Caddy, Traefik etc to proxy requests to Instapod:
 
 ```nginx
 # Nginx example
@@ -134,6 +134,29 @@ Any [Microsoft Edge TTS voice](https://learn.microsoft.com/en-us/azure/ai-servic
 
 - `sv-SE-SofieNeural` (female)
 - `sv-SE-MattiasNeural` (male)
+
+### Translation API
+
+Instapod translates articles using any **OpenAI-compatible** chat completions API (`/v1/chat/completions`). This means you can use:
+
+| Provider | `api_base` | Notes |
+|---|---|---|
+| **OpenAI** | `https://api.openai.com/v1` | Official API, requires API key |
+| **Azure OpenAI** | `https://<resource>.openai.azure.com/openai/deployments/<model>/v1` | Enterprise |
+| **Ollama** | `http://localhost:11434/v1` | Free, local, runs on your hardware |
+| **LM Studio** | `http://localhost:1234/v1` | Local with GUI |
+| **Any proxy** | Varies | Anything that speaks the OpenAI protocol |
+
+```yaml
+translation:
+  api_base: "http://localhost:11434/v1"  # Point to your API
+  api_key: "sk-..."                       # API key (or dummy for local)
+  model: "gpt-4o-mini"                    # Model name as the API expects it
+  target_language: "svenska"
+  skip_if_same: true                      # Skip translation if already in target language
+```
+
+> **Self-hosting tip:** If you want to proxy your existing ChatGPT, Claude, or Gemini subscriptions as an OpenAI-compatible API, check out [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It wraps multiple AI providers behind a single `/v1/chat/completions` endpoint with OAuth support and load balancing.
 
 ## API endpoints
 
