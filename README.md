@@ -201,4 +201,4 @@ The pipeline runs in a **separate Node.js process** to keep the Express server r
 
 ## License
 
-Private / unlicensed.
+MIT
