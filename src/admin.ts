@@ -4,7 +4,7 @@ import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
 import { saveConfig } from "./config.js";
-import { getLogs } from "./logs.js";
+import { addLog, getLogs } from "./logs.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -27,6 +27,23 @@ export function createAdminRouter(
   triggerRun: () => Promise<void>
 ): Router {
   const router = Router();
+
+  router.use("/admin", (req, res, next) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    const forwardedFor = compactHeader(req.get("x-forwarded-for"));
+    const userAgent = compactHeader(req.get("user-agent"));
+    const referer = compactHeader(req.get("referer"));
+
+    res.on("finish", () => {
+      addLog(
+        "info",
+        `[access] ${req.method} ${req.originalUrl} status=${res.statusCode} ip=${ip} xff=${forwardedFor} ua=${userAgent} referer=${referer}`,
+        "admin"
+      );
+    });
+
+    next();
+  });
 
   // ── Auth middleware (applied to all /admin and /api/* routes) ──
   router.use(["/admin", "/api"], createIpFilter(getConfig));
@@ -173,6 +190,11 @@ export function createAdminRouter(
   });
 
   return router;
+}
+
+function compactHeader(value?: string): string {
+  if (!value) return "-";
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
