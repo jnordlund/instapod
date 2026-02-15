@@ -148,6 +148,15 @@ export function handleLogin(
     res: Response,
     getConfig: () => AppConfig
 ): void {
+    const clientIp = req.ip || req.socket.remoteAddress || "";
+
+    // Rate limit login attempts
+    if (isLoginRateLimited(clientIp)) {
+        console.log(`[auth] Rate limited login from ${clientIp}`);
+        res.status(429).json({ error: "Too many login attempts. Try again later." });
+        return;
+    }
+
     const { password } = req.body || {};
     const config = getConfig();
 
@@ -156,6 +165,7 @@ export function handleLogin(
         return;
     }
 
+    clearLoginRateLimit(clientIp);
     const token = createSessionToken(getSecret(config));
     res.cookie(SESSION_COOKIE, token, {
         httpOnly: true,
@@ -215,6 +225,48 @@ export function handleLogout(_req: Request, res: Response): void {
     res.clearCookie(SESSION_COOKIE, { path: "/" });
     res.json({ status: "ok" });
 }
+
+// ── Rate limiting ──
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+const LOGIN_MAX_ATTEMPTS = 5;
+const loginAttempts = new Map<string, { count: number; firstAttempt: number }>();
+
+/**
+ * Simple in-memory rate limiter for login attempts.
+ * Returns true if the request should be blocked.
+ */
+export function isLoginRateLimited(ip: string): boolean {
+    const now = Date.now();
+    const entry = loginAttempts.get(ip);
+
+    if (!entry || now - entry.firstAttempt > LOGIN_WINDOW_MS) {
+        // Window expired or first attempt — reset
+        loginAttempts.set(ip, { count: 1, firstAttempt: now });
+        return false;
+    }
+
+    entry.count++;
+    if (entry.count > LOGIN_MAX_ATTEMPTS) {
+        return true;
+    }
+    return false;
+}
+
+/** Clear rate limit for an IP after successful login. */
+export function clearLoginRateLimit(ip: string): void {
+    loginAttempts.delete(ip);
+}
+
+// Periodically clean stale entries (every 5 minutes)
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of loginAttempts) {
+        if (now - entry.firstAttempt > LOGIN_WINDOW_MS) {
+            loginAttempts.delete(ip);
+        }
+    }
+}, 5 * 60 * 1000).unref();
 
 // ── Helpers ──
 
