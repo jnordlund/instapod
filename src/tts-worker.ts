@@ -4,7 +4,7 @@
  * Receives text via stdin to avoid argv length limits.
  */
 import { EdgeTTS } from "@andresaya/edge-tts";
-import { readFile, writeFile, unlink } from "node:fs/promises";
+import { readFile, writeFile, appendFile, unlink, stat } from "node:fs/promises";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -35,13 +35,16 @@ async function main() {
             chunkFiles.push(chunkPath);
         }
 
-        const buffers = await Promise.all(chunkFiles.map((f) => readFile(f)));
-        await writeFile(outputPath, Buffer.concat(buffers));
-        await Promise.all(chunkFiles.map((f) => unlink(f).catch(() => { })));
+        // Merge chunk files incrementally to avoid large in-memory Buffer.concat.
+        await writeFile(outputPath, "");
+        for (const chunkFile of chunkFiles) {
+            const data = await readFile(chunkFile);
+            await appendFile(outputPath, data);
+            await unlink(chunkFile).catch(() => { });
+        }
     }
 
     // Output file size for duration estimation
-    const { stat } = await import("node:fs/promises");
     const fileInfo = await stat(outputPath);
     process.stdout.write(JSON.stringify({ size: fileInfo.size }));
 }

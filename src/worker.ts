@@ -7,7 +7,10 @@ import { translateText, translateTitle } from "./translator.js";
 import { synthesize, generateFilename } from "./tts.js";
 import { StateManager } from "./state.js";
 
-const MAX_CONCURRENCY = 2;
+const MAX_CONCURRENCY = Math.max(
+    1,
+    Number.parseInt(process.env.PIPELINE_MAX_CONCURRENCY ?? "1", 10) || 1
+);
 
 /**
  * Run the full pipeline: fetch → parse → translate → TTS → update state.
@@ -60,30 +63,24 @@ export async function runPipeline(
     const audioDir = join(config.data_dir, "audio");
     mkdirSync(audioDir, { recursive: true });
 
-    // Process with limited concurrency
+    // Process with limited concurrency.
+    // Use a Set + finally cleanup so completed tasks are always removed.
     const queue = [...newBookmarks];
-    const running: Promise<void>[] = [];
+    const running = new Set<Promise<void>>();
 
-    while (queue.length > 0 || running.length > 0) {
-        while (running.length < MAX_CONCURRENCY && queue.length > 0) {
+    while (queue.length > 0 || running.size > 0) {
+        while (running.size < MAX_CONCURRENCY && queue.length > 0) {
             const bookmark = queue.shift()!;
-            const task = processBookmark(bookmark, client, config, state, audioDir);
-            running.push(task);
+            let task: Promise<void>;
+            task = processBookmark(bookmark, client, config, state, audioDir)
+                .finally(() => {
+                    running.delete(task);
+                });
+            running.add(task);
         }
 
-        if (running.length > 0) {
+        if (running.size > 0) {
             await Promise.race(running);
-            // Remove completed promises
-            for (let i = running.length - 1; i >= 0; i--) {
-                // Check if promise is settled by racing with a resolved promise
-                const settled = await Promise.race([
-                    running[i].then(() => true).catch(() => true),
-                    Promise.resolve(false),
-                ]);
-                if (settled) {
-                    running.splice(i, 1);
-                }
-            }
         }
     }
 
