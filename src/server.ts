@@ -19,8 +19,8 @@ export function createServer(
     // Ensure audio directory exists
     mkdirSync(audioDir, { recursive: true });
 
-    // JSON body parsing for admin API
-    app.use(express.json());
+    // JSON body parsing for admin API (limit size to prevent abuse)
+    app.use(express.json({ limit: "1mb" }));
 
     // Mutable config reference for admin updates
     let currentConfig = config;
@@ -53,7 +53,20 @@ export function createServer(
      * GET /audio/:filename — serve mp3 files
      */
     app.get("/audio/:filename", (req, res) => {
-        const filePath = join(audioDir, req.params.filename);
+        const filename = req.params.filename;
+
+        // Validate filename to prevent path traversal
+        if (!/^[a-zA-Z0-9_\-]+\.mp3$/.test(filename)) {
+            return res.status(400).json({ error: "Invalid filename" });
+        }
+
+        const filePath = join(audioDir, filename);
+
+        // Double-check resolved path stays within audioDir
+        if (!resolve(filePath).startsWith(resolve(audioDir) + "/")) {
+            return res.status(400).json({ error: "Invalid filename" });
+        }
+
         res.sendFile(filePath, (err) => {
             if (err) {
                 res.status(404).json({ error: "Audio file not found" });

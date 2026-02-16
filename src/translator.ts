@@ -115,8 +115,9 @@ async function callChatCompletions(
 
             if (!response.ok) {
                 const body = await response.text();
+                console.error(`[translator] API error (${response.status}):`, body);
                 throw new Error(
-                    `Translation API error ${response.status}: ${body}`
+                    `Translation API error (${response.status})`
                 );
             }
 

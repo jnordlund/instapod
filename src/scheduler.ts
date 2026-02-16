@@ -9,6 +9,36 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let isRunning = false;
 
 /**
+ * Build a restricted set of environment variables for the child process.
+ * Only forwards variables the pipeline actually needs, avoiding leakage
+ * of sensitive vars like NODE_OPTIONS, AWS credentials, tokens, etc.
+ */
+function buildChildEnv(): Record<string, string | undefined> {
+    const allowed = [
+        // Node.js essentials
+        "PATH", "HOME", "NODE_ENV", "TZ",
+        // App config
+        "CONFIG_PATH",
+        // Config env overrides (see config.ts applyEnvOverrides)
+        "INSTAPAPER_CONSUMER_KEY", "INSTAPAPER_CONSUMER_SECRET",
+        "INSTAPAPER_USERNAME", "INSTAPAPER_PASSWORD",
+        "TRANSLATION_API_BASE", "TRANSLATION_API_KEY",
+        "TRANSLATION_MODEL", "TRANSLATION_TARGET_LANGUAGE",
+        "TTS_VOICE",
+        "SERVER_PORT", "SERVER_BASE_URL",
+        "DATA_DIR",
+    ];
+
+    const env: Record<string, string | undefined> = {};
+    for (const key of allowed) {
+        if (process.env[key] !== undefined) {
+            env[key] = process.env[key];
+        }
+    }
+    return env;
+}
+
+/**
  * Spawn the pipeline as a separate Node process.
  * This keeps all heavy work (translation, TTS) out of the main Express process.
  */
@@ -17,7 +47,7 @@ function spawnPipeline(): Promise<void> {
         const runner = join(__dirname, "pipeline-runner.js");
         const child = spawn("node", [runner], {
             stdio: ["ignore", "pipe", "pipe"],      // capture child logs for admin log view
-            env: { ...process.env },                 // inherit env (CONFIG_PATH etc.)
+            env: buildChildEnv(),
         });
 
         const attachStream = (

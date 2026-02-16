@@ -56,7 +56,8 @@ export class InstapaperClient {
 
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(`Instapaper auth failed (${response.status}): ${text}`);
+            console.error(`[instapaper] Auth failed (${response.status}):`, text);
+            throw new Error("Instapaper authentication failed");
         }
 
         const responseText = await response.text();
@@ -149,7 +150,8 @@ export class InstapaperClient {
 
         if (!response.ok) {
             const text = await response.text();
-            throw new Error(`Instapaper API error (${response.status}): ${text}`);
+            console.error(`[instapaper] API error (${response.status}):`, text);
+            throw new Error(`Instapaper API request failed (${response.status})`);
         }
 
         return response;
