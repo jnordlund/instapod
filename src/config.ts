@@ -16,6 +16,10 @@ const REQUIRED_FIELDS = [
     "server.base_url",
 ] as const;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
     return path.split(".").reduce<unknown>((acc, key) => {
         if (acc && typeof acc === "object") {
@@ -132,7 +136,16 @@ export function loadConfig(configPath?: string): AppConfig {
 
     try {
         const content = readFileSync(resolved, "utf-8");
-        raw = yaml.load(content) as Record<string, unknown>;
+        const parsed = yaml.load(content);
+        if (parsed === undefined || parsed === null) {
+            raw = {};
+        } else if (isRecord(parsed)) {
+            raw = parsed;
+        } else {
+            throw new Error(
+                `Config file at ${resolved} must contain a YAML object at the top level.`
+            );
+        }
     } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
             console.warn(`Config file not found at ${resolved}, using env + defaults`);

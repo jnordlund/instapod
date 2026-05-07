@@ -63,4 +63,20 @@ instapaper:
 
         expect(() => loadConfig(path)).toThrow("Missing required config fields");
     });
+
+    it("treats an empty config file as env + defaults", () => {
+        const path = writeConfig("");
+
+        expect(() => loadConfig(path)).toThrow("Missing required config fields");
+    });
+
+    it("throws when the top-level YAML value is not an object", () => {
+        const path = writeConfig(`
+- not
+- an
+- object
+`);
+
+        expect(() => loadConfig(path)).toThrow("must contain a YAML object");
+    });
 });
