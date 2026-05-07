@@ -1,7 +1,7 @@
 node_modules/
 dist/
 data/
-config.yaml
+config.yaml*
 *.mp3
 state.json
 .env
