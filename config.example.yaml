@@ -22,6 +22,16 @@ tts:
   rate: "+0%"
   pitch: "+0Hz"
 
+spotify_upload:
+  enabled: false
+  cli_path: "save-to-spotify"
+  # show_id: "spotify:show:..."
+  # new_show: "Mina Artiklar"
+  language: "sv"
+  summary: "Artikel från {{source}}"
+  # image_path: "/data/cover.png"
+  wait_for_ready: false
+
 schedule:
   cron: "*/30 * * * *"  # every 30 minutes
 

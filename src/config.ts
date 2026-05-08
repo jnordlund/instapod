@@ -40,6 +40,14 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         TRANSLATION_MODEL: "translation.model",
         TRANSLATION_TARGET_LANGUAGE: "translation.target_language",
         TTS_VOICE: "tts.voice",
+        SPOTIFY_UPLOAD_ENABLED: "spotify_upload.enabled",
+        SPOTIFY_UPLOAD_CLI_PATH: "spotify_upload.cli_path",
+        SPOTIFY_UPLOAD_SHOW_ID: "spotify_upload.show_id",
+        SPOTIFY_UPLOAD_NEW_SHOW: "spotify_upload.new_show",
+        SPOTIFY_UPLOAD_LANGUAGE: "spotify_upload.language",
+        SPOTIFY_UPLOAD_SUMMARY: "spotify_upload.summary",
+        SPOTIFY_UPLOAD_IMAGE_PATH: "spotify_upload.image_path",
+        SPOTIFY_UPLOAD_WAIT_FOR_READY: "spotify_upload.wait_for_ready",
         SERVER_PORT: "server.port",
         SERVER_BASE_URL: "server.base_url",
         DATA_DIR: "data_dir",
@@ -59,13 +67,21 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         }
 
         const lastKey = parts[parts.length - 1];
-        // Convert port to number
         if (configPath === "server.port") {
             target[lastKey] = parseInt(envValue, 10);
+        } else if (
+            configPath === "spotify_upload.enabled" ||
+            configPath === "spotify_upload.wait_for_ready"
+        ) {
+            target[lastKey] = parseBoolean(envValue);
         } else {
             target[lastKey] = envValue;
         }
     }
+}
+
+function parseBoolean(value: string): boolean {
+    return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
 }
 
 const DEFAULTS: Partial<Record<string, unknown>> = {
@@ -79,6 +95,10 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "tts.voice": "sv-SE-SofieNeural",
     "tts.rate": "+0%",
     "tts.pitch": "+0Hz",
+    "spotify_upload.enabled": false,
+    "spotify_upload.cli_path": "save-to-spotify",
+    "spotify_upload.language": "sv",
+    "spotify_upload.wait_for_ready": false,
     "schedule.cron": "*/30 * * * *",
     "server.port": 8080,
     "feed.title": "Instapod",

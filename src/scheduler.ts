@@ -16,7 +16,7 @@ let isRunning = false;
 function buildChildEnv(): Record<string, string | undefined> {
     const allowed = [
         // Node.js essentials
-        "PATH", "HOME", "NODE_ENV", "TZ",
+        "PATH", "HOME", "NODE_ENV", "TZ", "XDG_CONFIG_HOME",
         // App config
         "CONFIG_PATH",
         // Config env overrides (see config.ts applyEnvOverrides)
@@ -25,6 +25,13 @@ function buildChildEnv(): Record<string, string | undefined> {
         "TRANSLATION_API_BASE", "TRANSLATION_API_KEY",
         "TRANSLATION_MODEL", "TRANSLATION_TARGET_LANGUAGE",
         "TTS_VOICE",
+        "SPOTIFY_UPLOAD_ENABLED", "SPOTIFY_UPLOAD_CLI_PATH",
+        "SPOTIFY_UPLOAD_SHOW_ID", "SPOTIFY_UPLOAD_NEW_SHOW",
+        "SPOTIFY_UPLOAD_LANGUAGE", "SPOTIFY_UPLOAD_SUMMARY",
+        "SPOTIFY_UPLOAD_IMAGE_PATH", "SPOTIFY_UPLOAD_WAIT_FOR_READY",
+        "SAVE_TO_SPOTIFY_AUTH_TOKEN", "SAVE_TO_SPOTIFY_BACKEND_URL",
+        "SAVE_TO_SPOTIFY_TIMEOUT", "SAVE_TO_SPOTIFY_CLIENT_ID",
+        "SAVE_TO_SPOTIFY_NO_UPDATE_CHECK",
         "SERVER_PORT", "SERVER_BASE_URL",
         "DATA_DIR",
     ];
