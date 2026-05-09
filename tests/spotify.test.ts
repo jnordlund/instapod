@@ -133,4 +133,29 @@ describe("spotify integration helpers", () => {
             })
         ).rejects.toThrow("save-to-spotify upload failed: boom");
     });
+
+    it("returns upload metadata when upload command succeeds", async () => {
+        spawnMock.mockImplementationOnce(() => {
+            const child = new FakeChildProcess();
+            queueMicrotask(() => {
+                child.stdout.emit(
+                    "data",
+                    '{"episode_id":"ep_123","episode_uri":"spotify:episode:ep_123","show_id":"show_9"}'
+                );
+                child.emit("close", 0);
+            });
+            return child as never;
+        });
+
+        const state = await uploadEpisodeToSpotify(BASE_CONFIG, {
+            filePath: "/tmp/audio.mp3",
+            title: "Example",
+            source: "example.com",
+        });
+
+        expect(state.episodeId).toBe("ep_123");
+        expect(state.episodeUri).toBe("spotify:episode:ep_123");
+        expect(state.showId).toBe("show_9");
+        expect(state.uploadedAt).toBeTruthy();
+    });
 });

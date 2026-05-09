@@ -1244,6 +1244,7 @@ async function startSpotifyAuth() {
   try {
     const r = await apiFetch('/api/spotify/auth/start', { method: 'POST' });
     const result = await r.json();
+    const hasAuthUrl = typeof result.authUrl === 'string' && result.authUrl.length > 0;
     const authUrl = normalizeSpotifyAuthUrl(result.authUrl);
     if (r.ok && result.ok && authUrl) {
       authLink.href = authUrl;
@@ -1252,7 +1253,7 @@ async function startSpotifyAuth() {
       setSpotifyStatus('Spotify auth waiting', 'Paste the redirect URL below.');
       showToast('Spotify auth started');
     } else {
-      const authUrlError = result.authUrl ? 'Invalid auth URL returned' : 'No auth URL returned';
+      const authUrlError = hasAuthUrl ? 'Invalid auth URL returned' : 'No auth URL returned';
       setSpotifyStatus('Spotify auth failed', result.error || result.output || authUrlError);
       showToast('Spotify auth failed', 'error');
     }
