@@ -1167,13 +1167,14 @@ function setSpotifyStatus(main, detail) {
   if (detailEl) detailEl.textContent = detail || '—';
 }
 
+const ALLOWED_SPOTIFY_AUTH_HOSTS = new Set(['accounts.spotify.com', 'saveto.spotify.com']);
+
 function normalizeSpotifyAuthUrl(rawUrl) {
   if (typeof rawUrl !== 'string') return null;
   try {
     const parsed = new URL(rawUrl);
-    const allowedHosts = new Set(['accounts.spotify.com', 'saveto.spotify.com']);
     if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-    if (!allowedHosts.has(parsed.hostname)) return null;
+    if (!ALLOWED_SPOTIFY_AUTH_HOSTS.has(parsed.hostname)) return null;
     return parsed.toString();
   } catch {
     return null;
@@ -1251,7 +1252,8 @@ async function startSpotifyAuth() {
       setSpotifyStatus('Spotify auth waiting', 'Paste the redirect URL below.');
       showToast('Spotify auth started');
     } else {
-      setSpotifyStatus('Spotify auth failed', result.error || result.output || 'No valid auth URL returned');
+      const authUrlError = result.authUrl ? 'Invalid auth URL returned' : 'No auth URL returned';
+      setSpotifyStatus('Spotify auth failed', result.error || result.output || authUrlError);
       showToast('Spotify auth failed', 'error');
     }
   } catch (e) {
