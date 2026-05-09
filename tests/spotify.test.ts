@@ -4,6 +4,7 @@ import type { AppConfig } from "../src/types.js";
 import {
     cancelSpotifyHeadlessAuth,
     getSpotifyStatus,
+    installSaveToSpotify,
     startSpotifyHeadlessAuth,
     uploadEpisodeToSpotify,
 } from "../src/spotify.js";
@@ -63,7 +64,9 @@ const BASE_CONFIG: AppConfig = {
 
 afterEach(() => {
     cancelSpotifyHeadlessAuth();
+    delete process.env.INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     spawnMock.mockReset();
 });
 
@@ -157,5 +160,19 @@ describe("spotify integration helpers", () => {
         expect(state.episodeUri).toBe("spotify:episode:ep_123");
         expect(state.showId).toBe("show_9");
         expect(state.uploadedAt).toBeTruthy();
+    });
+
+    it("blocks installer script execution unless explicitly allowed", async () => {
+        const fetchMock = vi.fn();
+        vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+        const result = await installSaveToSpotify(BASE_CONFIG);
+
+        expect(result.ok).toBe(false);
+        expect(result.error).toContain(
+            "Automatic CLI install is disabled by default for security."
+        );
+        expect(fetchMock).not.toHaveBeenCalled();
+        expect(spawnMock).not.toHaveBeenCalled();
     });
 });

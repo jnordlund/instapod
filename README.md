@@ -183,7 +183,7 @@ Instapod supports Spotify by uploading generated MP3 episodes through Spotify's 
 Short setup:
 
 1. Open `/admin`
-2. Use **Install CLI** if `save-to-spotify` is not already detected
+2. Install `save-to-spotify` manually (recommended), or set `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1` and use **Install CLI**
 3. Use **Authenticate** and complete the browser login flow
 4. Enable **Upload new episodes to Spotify**
 5. Set `show_id` or `new_show`, then save the configuration
@@ -216,7 +216,7 @@ If `show_id` is empty, you can set `new_show` to create/use a named show. If bot
 | `GET` | `/audio/:filename` | Stream an episode MP3 |
 | `POST` | `/trigger` | Manually trigger a pipeline run |
 | `GET` | `/health` | Health check with episode count |
-| `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI |
+| `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI (requires `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1`) |
 | `POST` | `/api/spotify/auth/start` | Start headless Spotify auth |
 | `POST` | `/api/spotify/auth/complete` | Complete headless Spotify auth |
 

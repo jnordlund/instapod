@@ -13,6 +13,7 @@ const COMMAND_TIMEOUT_MS = 120_000;
 const AUTH_URL_TIMEOUT_MS = 30_000;
 const AUTH_COMPLETE_TIMEOUT_MS = 90_000;
 const INSTALL_DOWNLOAD_TIMEOUT_MS = 30_000;
+const UNVERIFIED_INSTALL_FLAG = "INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL";
 
 interface CommandResult {
     ok: boolean;
@@ -146,6 +147,19 @@ export async function installSaveToSpotify(
     const cliPath = defaultSpotifyCliPath(config);
 
     mkdirSync(installDir, { recursive: true });
+
+    if (!isTruthyEnv(process.env[UNVERIFIED_INSTALL_FLAG])) {
+        return {
+            ok: false,
+            cliPath,
+            stdout: "",
+            stderr: "",
+            error:
+                "Automatic CLI install is disabled by default for security. " +
+                "Install save-to-spotify manually, or set " +
+                `${UNVERIFIED_INSTALL_FLAG}=1 to explicitly allow the unverified installer script.`,
+        };
+    }
 
     let script: string;
     try {
@@ -762,6 +776,10 @@ function formatError(err: unknown): string {
 
 function isAbortError(err: unknown): boolean {
     return err instanceof Error && err.name === "AbortError";
+}
+
+function isTruthyEnv(value: string | undefined): boolean {
+    return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
 }
 
 function getSpotifyUploadConfig(config: AppConfig): SpotifyUploadConfig {
