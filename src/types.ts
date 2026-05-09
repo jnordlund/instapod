@@ -66,7 +66,7 @@ export interface AppConfig {
     filters: FilterConfig;
     translation: TranslationConfig;
     tts: TtsConfig;
-    spotify_upload: SpotifyUploadConfig;
+    spotify_upload?: SpotifyUploadConfig;
     schedule: ScheduleConfig;
     server: ServerConfig;
     feed: FeedConfig;
