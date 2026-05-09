@@ -39,6 +39,17 @@ npm install
 npm run dev
 ```
 
+### 4. Optional: enable Spotify upload
+
+Open `http://localhost:8080/admin`, go to **Configuration → Spotify Upload**, then:
+
+1. Click **Install CLI** or confirm the detected `save-to-spotify` path
+2. Click **Authenticate** and open the Spotify authorization link
+3. Paste the redirect URL back into the admin UI and complete auth
+4. Enable **Upload new episodes to Spotify** and save the configuration
+
+Newly processed episodes will then be uploaded with Spotify's `save-to-spotify` CLI.
+
 ## Using with Instapaper
 
 Instapod uses **tags** to decide which articles to convert. The workflow:
@@ -106,7 +117,7 @@ Once the feed is accessible, add it to your podcast app as a custom RSS feed:
 | **Apple Podcasts** | Library → ⋯ → Follow a Show by URL → paste feed URL |
 | **Overcast** | Add Podcast → Add URL → paste feed URL |
 | **Pocket Casts** | Search → "Submit RSS" → paste feed URL |
-| **Spotify** | Enable Spotify Upload in Admin; custom RSS feeds are not supported |
+| **Spotify** | Supported via `save-to-spotify` upload; enable Spotify Upload in Admin |
 | **AntennaPod** | + Add Podcast → RSS feed URL → paste feed URL |
 | **Google Podcasts** | Add by RSS feed → paste feed URL |
 
@@ -167,7 +178,15 @@ translation:
 
 ### Spotify upload
 
-Instapod can upload generated MP3 episodes through Spotify's [`save-to-spotify`](https://github.com/spotify/save-to-spotify) CLI. Open `/admin`, use **Install CLI**, authenticate with **Authenticate**, then enable **Upload new episodes to Spotify**.
+Instapod supports Spotify by uploading generated MP3 episodes through Spotify's [`save-to-spotify`](https://github.com/spotify/save-to-spotify) CLI. This is separate from the RSS feed path because Spotify does not support subscribing to arbitrary private RSS feeds in the same way podcast apps do.
+
+Short setup:
+
+1. Open `/admin`
+2. Use **Install CLI** if `save-to-spotify` is not already detected
+3. Use **Authenticate** and complete the browser login flow
+4. Enable **Upload new episodes to Spotify**
+5. Set `show_id` or `new_show`, then save the configuration
 
 Headless auth uses:
 
