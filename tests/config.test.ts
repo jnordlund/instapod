@@ -53,6 +53,10 @@ server:
         expect(config.translation.model).toBe("gpt-4o-mini");
         expect(config.translation.title_prompt).toContain("{{target_language}}");
         expect(config.translation.text_prompt).toContain("{{target_language}}");
+        expect(config.spotify_upload.enabled).toBe(false);
+        expect(config.spotify_upload.cli_path).toBe("save-to-spotify");
+        expect(config.spotify_upload.language).toBe("sv");
+        expect(config.spotify_upload.wait_for_ready).toBe(false);
     });
 
     it("throws on missing required fields", () => {

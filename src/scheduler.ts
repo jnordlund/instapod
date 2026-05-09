@@ -1,8 +1,9 @@
 import cron from "node-cron";
 import { spawn } from "node:child_process";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addLog } from "./logs.js";
+import { resolveNodeScriptCommand } from "./node-script.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -16,7 +17,7 @@ let isRunning = false;
 function buildChildEnv(): Record<string, string | undefined> {
     const allowed = [
         // Node.js essentials
-        "PATH", "HOME", "NODE_ENV", "TZ",
+        "PATH", "HOME", "NODE_ENV", "TZ", "XDG_CONFIG_HOME",
         // App config
         "CONFIG_PATH",
         // Config env overrides (see config.ts applyEnvOverrides)
@@ -25,6 +26,13 @@ function buildChildEnv(): Record<string, string | undefined> {
         "TRANSLATION_API_BASE", "TRANSLATION_API_KEY",
         "TRANSLATION_MODEL", "TRANSLATION_TARGET_LANGUAGE",
         "TTS_VOICE",
+        "SPOTIFY_UPLOAD_ENABLED", "SPOTIFY_UPLOAD_CLI_PATH",
+        "SPOTIFY_UPLOAD_SHOW_ID", "SPOTIFY_UPLOAD_NEW_SHOW",
+        "SPOTIFY_UPLOAD_LANGUAGE", "SPOTIFY_UPLOAD_SUMMARY",
+        "SPOTIFY_UPLOAD_IMAGE_PATH", "SPOTIFY_UPLOAD_WAIT_FOR_READY",
+        "SAVE_TO_SPOTIFY_AUTH_TOKEN", "SAVE_TO_SPOTIFY_BACKEND_URL",
+        "SAVE_TO_SPOTIFY_TIMEOUT", "SAVE_TO_SPOTIFY_CLIENT_ID",
+        "SAVE_TO_SPOTIFY_NO_UPDATE_CHECK",
         "SERVER_PORT", "SERVER_BASE_URL",
         "DATA_DIR",
     ];
@@ -44,8 +52,8 @@ function buildChildEnv(): Record<string, string | undefined> {
  */
 function spawnPipeline(): Promise<void> {
     return new Promise((resolve, reject) => {
-        const runner = join(__dirname, "pipeline-runner.js");
-        const child = spawn("node", [runner], {
+        const { command, args } = resolveNodeScriptCommand(__dirname, "pipeline-runner.js");
+        const child = spawn(command, args, {
             stdio: ["ignore", "pipe", "pipe"],      // capture child logs for admin log view
             env: buildChildEnv(),
         });

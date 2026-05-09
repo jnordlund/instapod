@@ -30,6 +30,10 @@ export function createServer(
     // ── Admin routes ──
     app.use(createAdminRouter(getConfig, setConfig, state, triggerRun));
 
+    app.get("/", (_req, res) => {
+        res.redirect("/admin");
+    });
+
     /**
      * GET /feed — serve the podcast RSS feed
      */

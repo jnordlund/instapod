@@ -27,6 +27,17 @@ export interface TtsConfig {
     pitch: string;
 }
 
+export interface SpotifyUploadConfig {
+    enabled: boolean;
+    cli_path: string;
+    show_id?: string;
+    new_show?: string;
+    language: string;
+    summary?: string;
+    image_path?: string;
+    wait_for_ready: boolean;
+}
+
 export interface ScheduleConfig {
     cron: string;
 }
@@ -55,6 +66,7 @@ export interface AppConfig {
     filters: FilterConfig;
     translation: TranslationConfig;
     tts: TtsConfig;
+    spotify_upload?: SpotifyUploadConfig;
     schedule: ScheduleConfig;
     server: ServerConfig;
     feed: FeedConfig;
@@ -82,6 +94,16 @@ export interface ProcessedBookmark {
     filename: string;
     duration: number; // seconds
     pubDate: string;  // ISO 8601
+    spotify?: SpotifyUploadState;
+}
+
+export interface SpotifyUploadState {
+    uploadedAt?: string;
+    episodeId?: string;
+    episodeUri?: string;
+    showId?: string;
+    readyStatus?: string;
+    error?: string;
 }
 
 export interface AppState {

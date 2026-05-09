@@ -1,11 +1,12 @@
 import { join } from "node:path";
 import { mkdirSync } from "node:fs";
-import type { AppConfig } from "./types.js";
+import type { AppConfig, ProcessedBookmark } from "./types.js";
 import { InstapaperClient } from "./instapaper.js";
 import { parseArticle } from "./parser.js";
 import { translateText, translateTitle } from "./translator.js";
 import { synthesize, generateFilename } from "./tts.js";
 import { StateManager } from "./state.js";
+import { uploadEpisodeToSpotify } from "./spotify.js";
 
 const MAX_CONCURRENCY = Math.max(
     1,
@@ -125,15 +126,36 @@ async function processBookmark(
         const outputPath = join(audioDir, filename);
         const duration = await synthesize(textForTTS, outputPath, config.tts);
 
-        // 5. Update state
-        state.addProcessed({
+        const processed: ProcessedBookmark = {
             bookmarkId: id,
             title: translatedTitle,
             source: parsed.source,
             filename,
             duration,
             pubDate: new Date().toISOString(),
-        });
+        };
+
+        // 5. Optional Spotify upload
+        if (config.spotify_upload?.enabled) {
+            try {
+                console.log(`[worker] Uploading to Spotify: "${translatedTitle}"`);
+                processed.spotify = await uploadEpisodeToSpotify(config, {
+                    filePath: outputPath,
+                    title: translatedTitle,
+                    source: parsed.source,
+                });
+                console.log(`[worker] ✓ Uploaded to Spotify: "${translatedTitle}"`);
+            } catch (err) {
+                const message = err instanceof Error ? err.message : String(err);
+                processed.spotify = {
+                    error: message,
+                };
+                console.error(`[worker] ✗ Spotify upload failed for ${id}:`, err);
+            }
+        }
+
+        // 6. Update state
+        state.addProcessed(processed);
 
         console.log(`[worker] ✓ Completed: "${translatedTitle}" (${duration}s)`);
     } catch (err) {

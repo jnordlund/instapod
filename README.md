@@ -1,17 +1,19 @@
 # 🎙️ Instapod
 
-Convert your [Instapaper](https://www.instapaper.com/) articles into a personal podcast feed — automatically fetched, translated, and read aloud via text-to-speech.
+Convert your [Instapaper](https://www.instapaper.com/) articles into a personal podcast feed — automatically fetched, translated, read aloud via text-to-speech, and optionally uploaded to Spotify.
 
 ## How it works
 
 ```
 Instapaper → Fetch articles → Translate (LLM) → Text-to-Speech → RSS Feed
+                                                              ↘ Spotify Upload
 ```
 
 1. **Fetch** — Pulls saved articles from Instapaper, filtered by tag
 2. **Translate** — Translates article text via any OpenAI-compatible API
 3. **Synthesize** — Converts translated text to speech using Microsoft Edge TTS
 4. **Serve** — Hosts an RSS podcast feed you can subscribe to in any podcast app
+5. **Upload** — Optionally saves new episodes to Spotify via `save-to-spotify`
 
 ## Quick start
 
@@ -36,6 +38,17 @@ The feed is available at `http://localhost:8080/feed`.
 npm install
 npm run dev
 ```
+
+### 4. Optional: enable Spotify upload
+
+Open `http://localhost:8080/admin`, go to **Configuration → Spotify Upload**, then:
+
+1. Click **Install CLI** or confirm the detected `save-to-spotify` path
+2. Click **Authenticate** and open the Spotify authorization link
+3. Paste the redirect URL back into the admin UI and complete auth
+4. Enable **Upload new episodes to Spotify** and save the configuration
+
+Newly processed episodes will then be uploaded with Spotify's `save-to-spotify` CLI.
 
 ## Using with Instapaper
 
@@ -104,7 +117,7 @@ Once the feed is accessible, add it to your podcast app as a custom RSS feed:
 | **Apple Podcasts** | Library → ⋯ → Follow a Show by URL → paste feed URL |
 | **Overcast** | Add Podcast → Add URL → paste feed URL |
 | **Pocket Casts** | Search → "Submit RSS" → paste feed URL |
-| **Spotify** | Not supported (no custom RSS feeds) |
+| **Spotify** | Supported via `save-to-spotify` upload; enable Spotify Upload in Admin |
 | **AntennaPod** | + Add Podcast → RSS feed URL → paste feed URL |
 | **Google Podcasts** | Add by RSS feed → paste feed URL |
 
@@ -123,6 +136,7 @@ See [`config.example.yaml`](config.example.yaml) for all options:
 | `translation` | `api_base`, `api_key`, `model` | OpenAI-compatible translation API |
 | `translation` | `target_language`, `skip_if_same`, `title_prompt`, `text_prompt` | Target language, language-skip, and translation prompt templates |
 | `tts` | `voice`, `rate`, `pitch` | Edge TTS voice settings |
+| `spotify_upload` | `enabled`, `cli_path`, `show_id`, `new_show`, `language`, `summary`, `image_path`, `wait_for_ready` | Optional upload to Spotify via `save-to-spotify` |
 | `schedule` | `cron` | How often to check for new articles |
 | `server` | `port`, `base_url` | HTTP server port and public URL for feed links |
 | `feed` | `title`, `description`, `author`, `image` | Podcast feed metadata |
@@ -162,6 +176,38 @@ translation:
 
 > **Self-hosting tip:** If you want to proxy your existing ChatGPT, Claude, or Gemini subscriptions as an OpenAI-compatible API, check out [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). It wraps multiple AI providers behind a single `/v1/chat/completions` endpoint with OAuth support and load balancing.
 
+### Spotify upload
+
+Instapod supports Spotify by uploading generated MP3 episodes through Spotify's [`save-to-spotify`](https://github.com/spotify/save-to-spotify) CLI. This is separate from the RSS feed path because Spotify does not support subscribing to arbitrary private RSS feeds in the same way podcast apps do.
+
+Short setup:
+
+1. Open `/admin`
+2. Install `save-to-spotify` manually (recommended), or set `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1` and use **Install CLI**
+3. Use **Authenticate** and complete the browser login flow
+4. Enable **Upload new episodes to Spotify**
+5. Set `show_id` or `new_show`, then save the configuration
+
+Headless auth uses:
+
+```bash
+save-to-spotify auth login --no-browser
+```
+
+The admin UI shows the authorization URL and accepts the redirect URL that the CLI asks for. After the first login, `save-to-spotify` stores and refreshes its token automatically. Instapod stores that config under `data_dir/config` unless `XDG_CONFIG_HOME` is already set. For fully non-interactive auth, set `SAVE_TO_SPOTIFY_AUTH_TOKEN`.
+
+```yaml
+spotify_upload:
+  enabled: true
+  cli_path: "/data/bin/save-to-spotify"
+  show_id: "spotify:show:..."
+  language: "sv"
+  summary: "Artikel från {{source}}"
+  wait_for_ready: false
+```
+
+If `show_id` is empty, you can set `new_show` to create/use a named show. If both are empty, the CLI uses its most recent show or creates one.
+
 ## API endpoints
 
 | Method | Path | Description |
@@ -170,6 +216,9 @@ translation:
 | `GET` | `/audio/:filename` | Stream an episode MP3 |
 | `POST` | `/trigger` | Manually trigger a pipeline run |
 | `GET` | `/health` | Health check with episode count |
+| `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI (requires `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1`) |
+| `POST` | `/api/spotify/auth/start` | Start headless Spotify auth |
+| `POST` | `/api/spotify/auth/complete` | Complete headless Spotify auth |
 
 ## Architecture
 
@@ -177,7 +226,8 @@ translation:
 index.ts          → Express server + scheduler
 scheduler.ts      → Spawns pipeline as child process (cron)
 pipeline-runner.ts → Standalone pipeline script
-worker.ts         → Fetch → parse → translate → TTS → save state
+worker.ts         → Fetch → parse → translate → TTS → optional Spotify upload → save state
+spotify.ts        → save-to-spotify install/auth/upload wrapper
 tts.ts            → Spawns TTS in child process
 tts-worker.ts     → Edge TTS synthesis (runs isolated)
 translator.ts     → OpenAI-compatible translation with retry
@@ -197,6 +247,7 @@ The pipeline runs in a **separate Node.js process** to keep the Express server r
 - **Server**: Express
 - **Scheduling**: node-cron
 - **Auth**: OAuth 1.0a (Instapaper API)
+- **Spotify upload**: Spotify `save-to-spotify` CLI
 - **Containerization**: Docker (multi-stage build)
 
 ## License

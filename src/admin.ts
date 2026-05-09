@@ -10,6 +10,13 @@ import {
   DEFAULT_TITLE_PROMPT_TEMPLATE,
 } from "./translation-prompts.js";
 import {
+  cancelSpotifyHeadlessAuth,
+  completeSpotifyHeadlessAuth,
+  getSpotifyStatus,
+  installSaveToSpotify,
+  startSpotifyHeadlessAuth,
+} from "./spotify.js";
+import {
   createIpFilter,
   createAuthGuard,
   handleLogin,
@@ -179,6 +186,70 @@ export function createAdminRouter(
     const sinceId = Number.isNaN(parsedSince) ? undefined : parsedSince;
 
     res.json({ logs: getLogs({ limit, sinceId }) });
+  });
+
+  // ── API: Spotify onboarding/status ──
+  router.get("/api/spotify/status", async (_req, res) => {
+    try {
+      const status = await getSpotifyStatus(getConfig());
+      res.json(status);
+    } catch (err) {
+      console.error("[admin] Spotify status failed:", err);
+      res.status(500).json({ error: "Failed to check Spotify status" });
+    }
+  });
+
+  router.post("/api/spotify/install", async (_req, res) => {
+    try {
+      const current = getConfig();
+      const result = await installSaveToSpotify(current);
+
+        if (result.ok) {
+          const merged = JSON.parse(JSON.stringify(current)) as AppConfig;
+          merged.spotify_upload = {
+            enabled: merged.spotify_upload?.enabled ?? false,
+            language: merged.spotify_upload?.language ?? merged.feed.language ?? "sv",
+            wait_for_ready: merged.spotify_upload?.wait_for_ready ?? false,
+            ...merged.spotify_upload,
+            cli_path: result.cliPath,
+          };
+        saveConfig(merged);
+        setConfig(merged);
+      }
+
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify install failed:", err);
+      res.status(500).json({ error: "Failed to install Save to Spotify" });
+    }
+  });
+
+  router.post("/api/spotify/auth/start", async (_req, res) => {
+    try {
+      const result = await startSpotifyHeadlessAuth(getConfig());
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify auth start failed:", err);
+      res.status(500).json({ error: "Failed to start Spotify authentication" });
+    }
+  });
+
+  router.post("/api/spotify/auth/complete", async (req, res) => {
+    try {
+      const result = await completeSpotifyHeadlessAuth(
+        getConfig(),
+        String(req.body?.redirectUrl ?? "")
+      );
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify auth complete failed:", err);
+      res.status(500).json({ error: "Failed to complete Spotify authentication" });
+    }
+  });
+
+  router.post("/api/spotify/auth/cancel", (_req, res) => {
+    const result = cancelSpotifyHeadlessAuth();
+    res.json(result);
   });
 
   // ── API: Trigger pipeline ──
@@ -381,6 +452,49 @@ header h1 {
   margin-top: 4px;
   font-size: 0.75rem;
   color: var(--text2);
+}
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.checkbox-row input { width: 16px; height: 16px; }
+.inline-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.inline-status .main {
+  font-weight: 600;
+}
+.inline-status .detail {
+  color: var(--text2);
+  font-size: 0.78rem;
+  margin-top: 2px;
+  word-break: break-all;
+}
+.auth-panel {
+  display: none;
+  grid-column: 1 / -1;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.auth-panel.active { display: block; }
+.auth-url {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--accent2);
+  word-break: break-all;
 }
 
 /* Episode list */
@@ -673,6 +787,77 @@ header h1 {
       </div>
     </div>
 
+    <!-- Spotify Upload -->
+    <div class="card">
+      <h2><span class="icon">♫</span> Spotify Upload</h2>
+      <div class="form-grid">
+        <div class="inline-status" style="grid-column:1/-1;">
+          <div>
+            <div class="main" id="spotifyStatusMain">Checking Spotify...</div>
+            <div class="detail" id="spotifyStatusDetail">—</div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="loadSpotifyStatus()">Refresh</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="installSpotify()" id="spotifyInstallBtn">Install CLI</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="startSpotifyAuth()" id="spotifyAuthBtn">Authenticate</button>
+          </div>
+        </div>
+
+        <div class="auth-panel" id="spotifyAuthPanel">
+          <label class="form-group" style="display:block;">
+            <span style="display:block;color:var(--text2);font-size:0.78rem;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Auth URL</span>
+            <a href="#" target="_blank" rel="noreferrer" id="spotifyAuthUrl" class="auth-url">—</a>
+          </label>
+          <div class="form-group full">
+            <label>Redirect URL</label>
+            <textarea id="spotifyRedirectUrl" rows="3" placeholder="Paste redirect URL here"></textarea>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="cancelSpotifyAuth()">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="completeSpotifyAuth()" id="spotifyCompleteAuthBtn">Complete Auth</button>
+          </div>
+        </div>
+
+        <div class="form-group full" style="align-items:flex-start;">
+          <label class="checkbox-row">
+            <input type="checkbox" id="cfg-spotify-enabled">
+            Upload new episodes to Spotify
+          </label>
+        </div>
+        <div class="form-group">
+          <label>CLI Path</label>
+          <input type="text" id="cfg-spotify-cli_path" placeholder="save-to-spotify">
+        </div>
+        <div class="form-group">
+          <label>Language</label>
+          <input type="text" id="cfg-spotify-language" placeholder="sv">
+        </div>
+        <div class="form-group">
+          <label>Show ID / URI</label>
+          <input type="text" id="cfg-spotify-show_id" placeholder="spotify:show:...">
+        </div>
+        <div class="form-group">
+          <label>New Show Title</label>
+          <input type="text" id="cfg-spotify-new_show" placeholder="Mina Artiklar">
+        </div>
+        <div class="form-group full">
+          <label>Summary Template</label>
+          <input type="text" id="cfg-spotify-summary" placeholder="Artikel från {{source}}">
+          <div class="form-help">Available placeholders: <code>{{title}}</code>, <code>{{source}}</code>.</div>
+        </div>
+        <div class="form-group">
+          <label>Cover Image Path</label>
+          <input type="text" id="cfg-spotify-image_path" placeholder="/data/cover.png">
+        </div>
+        <div class="form-group" style="align-items:flex-start;justify-content:end;">
+          <label class="checkbox-row">
+            <input type="checkbox" id="cfg-spotify-wait_for_ready">
+            Wait until ready
+          </label>
+        </div>
+      </div>
+    </div>
+
     <!-- Schedule -->
     <div class="card">
       <h2><span class="icon">⏰</span> Schedule</h2>
@@ -812,6 +997,13 @@ function formatLogTimestamp(iso) {
   return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour12: false });
 }
 
+function formatSpotifyEpisodeStatus(spotify) {
+  if (!spotify) return '';
+  if (spotify.error) return 'Spotify upload failed';
+  if (spotify.episodeUri || spotify.episodeId) return 'Spotify uploaded';
+  return '';
+}
+
 // ── API calls ──
 async function apiFetch(url, opts = {}) {
   const r = await fetch(url, { credentials: 'include', ...opts });
@@ -849,6 +1041,7 @@ async function loadEpisodes() {
             <span>⏱ \${formatDuration(ep.duration)}</span>
             <span>📅 \${formatDate(ep.pubDate)}</span>
             <span>🔗 \${escapeHtml(ep.source || '')}</span>
+            <span>\${escapeHtml(formatSpotifyEpisodeStatus(ep.spotify))}</span>
           </div>
         </div>
         <div class="episode-actions">
@@ -964,6 +1157,154 @@ async function triggerPipeline() {
     loadStatus();
     loadEpisodes();
   }, 5000);
+}
+
+// ── Spotify onboarding ──
+function setSpotifyStatus(main, detail) {
+  const mainEl = document.getElementById('spotifyStatusMain');
+  const detailEl = document.getElementById('spotifyStatusDetail');
+  if (mainEl) mainEl.textContent = main;
+  if (detailEl) detailEl.textContent = detail || '—';
+}
+
+const ALLOWED_SPOTIFY_AUTH_HOSTS = new Set(['accounts.spotify.com', 'saveto.spotify.com']);
+
+function normalizeSpotifyAuthUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return null;
+  try {
+    const parsed = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    if (!ALLOWED_SPOTIFY_AUTH_HOSTS.has(parsed.hostname)) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
+function resetSpotifyInstallButton(label = 'Install CLI') {
+  const btn = document.getElementById('spotifyInstallBtn');
+  if (!btn) return;
+  btn.innerHTML = label;
+  btn.disabled = false;
+}
+
+async function loadSpotifyStatus() {
+  try {
+    const r = await apiFetch('/api/spotify/status');
+    const status = await r.json();
+    resetSpotifyInstallButton(status.installed ? 'Reinstall CLI' : 'Install CLI');
+    if (!status.installed) {
+      setSpotifyStatus('CLI not installed', status.message || status.cliPath || '');
+      return;
+    }
+    if (!status.authenticated) {
+      setSpotifyStatus('CLI installed, not authenticated', status.message || status.cliPath || '');
+      return;
+    }
+    setSpotifyStatus('Spotify ready', status.cliPath || status.version || '');
+  } catch (e) {
+    if (e.message !== 'auth') {
+      resetSpotifyInstallButton();
+      setSpotifyStatus('Spotify status failed', e.message || String(e));
+    }
+  }
+}
+
+async function installSpotify() {
+  const btn = document.getElementById('spotifyInstallBtn');
+  btn.innerHTML = '<span class="spinner"></span> Installing...';
+  btn.disabled = true;
+  setSpotifyStatus('Installing CLI...', '');
+  try {
+    const r = await apiFetch('/api/spotify/install', { method: 'POST' });
+    const result = await r.json();
+    if (r.ok && result.ok) {
+      setValue('cfg-spotify-cli_path', result.cliPath);
+      showToast('Save to Spotify installed');
+      await loadConfig();
+      await loadSpotifyStatus();
+    } else {
+      setSpotifyStatus('Install failed', result.error || result.stderr || 'Unknown error');
+      showToast('Spotify install failed', 'error');
+    }
+  } catch (e) {
+    setSpotifyStatus('Install failed', e.message || String(e));
+    showToast('Spotify install failed', 'error');
+  } finally {
+    resetSpotifyInstallButton();
+  }
+}
+
+async function startSpotifyAuth() {
+  const btn = document.getElementById('spotifyAuthBtn');
+  const panel = document.getElementById('spotifyAuthPanel');
+  const authLink = document.getElementById('spotifyAuthUrl');
+  btn.innerHTML = '<span class="spinner"></span> Starting...';
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/spotify/auth/start', { method: 'POST' });
+    const result = await r.json();
+    const hasAuthUrl = typeof result.authUrl === 'string' && result.authUrl.length > 0;
+    const authUrl = normalizeSpotifyAuthUrl(result.authUrl);
+    if (r.ok && result.ok && authUrl) {
+      authLink.href = authUrl;
+      authLink.textContent = authUrl;
+      panel.classList.add('active');
+      setSpotifyStatus('Spotify auth waiting', 'Paste the redirect URL below.');
+      showToast('Spotify auth started');
+    } else {
+      const authUrlError = hasAuthUrl ? 'Invalid auth URL returned' : 'No auth URL returned';
+      setSpotifyStatus('Spotify auth failed', result.error || result.output || authUrlError);
+      showToast('Spotify auth failed', 'error');
+    }
+  } catch (e) {
+    setSpotifyStatus('Spotify auth failed', e.message || String(e));
+    showToast('Spotify auth failed', 'error');
+  } finally {
+    btn.innerHTML = 'Authenticate';
+    btn.disabled = false;
+  }
+}
+
+async function completeSpotifyAuth() {
+  const btn = document.getElementById('spotifyCompleteAuthBtn');
+  const panel = document.getElementById('spotifyAuthPanel');
+  const redirectUrl = getValue('spotifyRedirectUrl');
+  btn.innerHTML = '<span class="spinner"></span> Completing...';
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/spotify/auth/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ redirectUrl }),
+    });
+    const result = await r.json();
+    if (r.ok && result.ok) {
+      panel.classList.remove('active');
+      setValue('spotifyRedirectUrl', '');
+      showToast('Spotify authenticated');
+      await loadSpotifyStatus();
+    } else {
+      setSpotifyStatus('Spotify auth failed', result.error || result.output || 'Unknown error');
+      showToast('Spotify auth failed', 'error');
+    }
+  } catch (e) {
+    setSpotifyStatus('Spotify auth failed', e.message || String(e));
+    showToast('Spotify auth failed', 'error');
+  } finally {
+    btn.innerHTML = 'Complete Auth';
+    btn.disabled = false;
+  }
+}
+
+async function cancelSpotifyAuth() {
+  try {
+    await apiFetch('/api/spotify/auth/cancel', { method: 'POST' });
+  } catch {}
+  const panel = document.getElementById('spotifyAuthPanel');
+  if (panel) panel.classList.remove('active');
+  setValue('spotifyRedirectUrl', '');
+  loadSpotifyStatus();
 }
 
 // ── Config form ──
@@ -1108,6 +1449,14 @@ function populateForm(c) {
   setValue('cfg-tts-voice', c.tts?.voice);
   setValue('cfg-tts-rate', c.tts?.rate);
   setValue('cfg-tts-pitch', c.tts?.pitch);
+  setChecked('cfg-spotify-enabled', c.spotify_upload?.enabled);
+  setValue('cfg-spotify-cli_path', c.spotify_upload?.cli_path);
+  setValue('cfg-spotify-language', c.spotify_upload?.language);
+  setValue('cfg-spotify-show_id', c.spotify_upload?.show_id);
+  setValue('cfg-spotify-new_show', c.spotify_upload?.new_show);
+  setValue('cfg-spotify-summary', c.spotify_upload?.summary);
+  setValue('cfg-spotify-image_path', c.spotify_upload?.image_path);
+  setChecked('cfg-spotify-wait_for_ready', c.spotify_upload?.wait_for_ready);
   syncScheduleUiFromCron(c.schedule?.cron);
   setValue('cfg-server-port', c.server?.port);
   setValue('cfg-server-base_url', c.server?.base_url);
@@ -1128,6 +1477,14 @@ function setValue(id, val) {
 function getValue(id) {
   const el = document.getElementById(id);
   return el ? el.value : '';
+}
+function setChecked(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.checked = Boolean(val);
+}
+function getChecked(id) {
+  const el = document.getElementById(id);
+  return Boolean(el && el.checked);
 }
 
 async function saveConfigForm() {
@@ -1163,6 +1520,16 @@ async function saveConfigForm() {
       voice: getValue('cfg-tts-voice'),
       rate: getValue('cfg-tts-rate'),
       pitch: getValue('cfg-tts-pitch'),
+    },
+    spotify_upload: {
+      enabled: getChecked('cfg-spotify-enabled'),
+      cli_path: getValue('cfg-spotify-cli_path') || 'save-to-spotify',
+      show_id: getValue('cfg-spotify-show_id') || undefined,
+      new_show: getValue('cfg-spotify-new_show') || undefined,
+      language: getValue('cfg-spotify-language') || currentConfig?.feed?.language || 'sv',
+      summary: getValue('cfg-spotify-summary') || undefined,
+      image_path: getValue('cfg-spotify-image_path') || undefined,
+      wait_for_ready: getChecked('cfg-spotify-wait_for_ready'),
     },
     schedule: { cron: cronExpr },
     server: {
@@ -1215,6 +1582,7 @@ loadStatus();
 loadEpisodes();
 loadLogs(true);
 loadConfig();
+loadSpotifyStatus();
 setInterval(loadStatus, 30000);
 setInterval(() => {
   const logsTab = document.getElementById('tab-logs');
