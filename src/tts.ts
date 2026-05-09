@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
 import { mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { TtsConfig } from "./types.js";
+import { resolveNodeScriptCommand } from "./node-script.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -18,10 +19,10 @@ export async function synthesize(
 ): Promise<number> {
     mkdirSync(dirname(outputPath), { recursive: true });
 
-    const workerPath = join(__dirname, "tts-worker.js");
+    const { command, args } = resolveNodeScriptCommand(__dirname, "tts-worker.js");
 
     return new Promise<number>((resolve, reject) => {
-        const child = spawn("node", [workerPath], {
+        const child = spawn(command, args, {
             stdio: ["pipe", "pipe", "inherit"],
         });
 

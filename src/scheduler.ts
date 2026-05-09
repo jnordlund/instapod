@@ -1,8 +1,9 @@
 import cron from "node-cron";
 import { spawn } from "node:child_process";
-import { join, dirname } from "node:path";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addLog } from "./logs.js";
+import { resolveNodeScriptCommand } from "./node-script.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -51,8 +52,8 @@ function buildChildEnv(): Record<string, string | undefined> {
  */
 function spawnPipeline(): Promise<void> {
     return new Promise((resolve, reject) => {
-        const runner = join(__dirname, "pipeline-runner.js");
-        const child = spawn("node", [runner], {
+        const { command, args } = resolveNodeScriptCommand(__dirname, "pipeline-runner.js");
+        const child = spawn(command, args, {
             stdio: ["ignore", "pipe", "pipe"],      // capture child logs for admin log view
             env: buildChildEnv(),
         });

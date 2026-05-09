@@ -234,6 +234,7 @@ export function createAdminRouter(
   router.post("/api/spotify/auth/complete", async (req, res) => {
     try {
       const result = await completeSpotifyHeadlessAuth(
+        getConfig(),
         String(req.body?.redirectUrl ?? "")
       );
       res.status(result.ok ? 200 : 500).json(result);
@@ -1163,10 +1164,18 @@ function setSpotifyStatus(main, detail) {
   if (detailEl) detailEl.textContent = detail || '—';
 }
 
+function resetSpotifyInstallButton(label = 'Install CLI') {
+  const btn = document.getElementById('spotifyInstallBtn');
+  if (!btn) return;
+  btn.innerHTML = label;
+  btn.disabled = false;
+}
+
 async function loadSpotifyStatus() {
   try {
     const r = await apiFetch('/api/spotify/status');
     const status = await r.json();
+    resetSpotifyInstallButton(status.installed ? 'Reinstall CLI' : 'Install CLI');
     if (!status.installed) {
       setSpotifyStatus('CLI not installed', status.message || status.cliPath || '');
       return;
@@ -1178,6 +1187,7 @@ async function loadSpotifyStatus() {
     setSpotifyStatus('Spotify ready', status.cliPath || status.version || '');
   } catch (e) {
     if (e.message !== 'auth') {
+      resetSpotifyInstallButton();
       setSpotifyStatus('Spotify status failed', e.message || String(e));
     }
   }
@@ -1204,8 +1214,7 @@ async function installSpotify() {
     setSpotifyStatus('Install failed', e.message || String(e));
     showToast('Spotify install failed', 'error');
   } finally {
-    btn.innerHTML = 'Install CLI';
-    btn.disabled = false;
+    resetSpotifyInstallButton();
   }
 }
 

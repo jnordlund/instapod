@@ -63,34 +63,75 @@ export function resolveSpotifyCliPath(config: AppConfig): string {
 }
 
 export async function getSpotifyStatus(config: AppConfig): Promise<SpotifyStatus> {
-    const cliPath = resolveSpotifyCliPath(config);
-    const versionResult = await runSaveToSpotify(config, ["version"], {
-        timeoutMs: 15_000,
-    });
+    const candidates = spotifyCliPathCandidates(config);
+    let cliPath = candidates[0];
+    let versionResult: CommandResult | undefined;
 
-    if (!versionResult.ok) {
+    for (const candidate of candidates) {
+        const result = await runCommand(candidate, ["version"], {
+            env: buildSpotifyEnv(config, candidate),
+            timeoutMs: 15_000,
+        });
+
+        if (result.ok) {
+            cliPath = candidate;
+            versionResult = result;
+            break;
+        }
+
+        versionResult ??= result;
+    }
+
+    if (!versionResult?.ok) {
         return {
             installed: false,
             authenticated: false,
             cliPath,
-            message: normalizeCommandError("version", versionResult),
+            message: versionResult
+                ? normalizeCommandError("version", versionResult)
+                : "save-to-spotify CLI was not found.",
         };
     }
 
-    const authResult = await runSaveToSpotify(config, ["--json", "auth", "status"], {
+    const authResult = await runCommand(cliPath, ["--json", "auth", "status"], {
+        env: buildSpotifyEnv(config, cliPath),
         timeoutMs: 20_000,
     });
+    const authenticated = authResult.ok && isSpotifyAuthenticated(authResult.json);
 
     return {
         installed: true,
-        authenticated: authResult.ok,
+        authenticated,
         cliPath,
         version: versionResult.stdout.trim() || undefined,
         authStatus: authResult.json,
-        message: authResult.ok
+        message: authenticated
             ? "Authenticated"
-            : normalizeCommandError("auth status", authResult),
+            : authResult.ok
+                ? spotifyAuthStatusMessage(authResult.json)
+                : normalizeCommandError("auth status", authResult),
     };
+}
+
+function spotifyCliPathCandidates(config: AppConfig): string[] {
+    return uniqueStrings([
+        resolveSpotifyCliPath(config),
+        defaultSpotifyCliPath(config),
+        "save-to-spotify",
+    ]);
+}
+
+function uniqueStrings(values: string[]): string[] {
+    const seen = new Set<string>();
+    const unique: string[] = [];
+
+    for (const value of values) {
+        if (seen.has(value)) continue;
+        seen.add(value);
+        unique.push(value);
+    }
+
+    return unique;
 }
 
 export async function installSaveToSpotify(
@@ -268,6 +309,7 @@ export async function startSpotifyHeadlessAuth(
 }
 
 export async function completeSpotifyHeadlessAuth(
+    config: AppConfig,
     redirectUrl: string
 ): Promise<SpotifyAuthResult> {
     const session = activeAuth;
@@ -302,7 +344,7 @@ export async function completeSpotifyHeadlessAuth(
     let result: CommandResult;
     try {
         result = await withTimeout(
-            session.closePromise,
+            waitForAuthCompletion(config, session),
             AUTH_COMPLETE_TIMEOUT_MS,
             () => {
                 if (activeAuth === session) {
@@ -574,6 +616,41 @@ function findStringValue(value: unknown, keys: string[]): string | undefined {
     return undefined;
 }
 
+function isSpotifyAuthenticated(value: unknown): boolean {
+    if (!value || typeof value !== "object") return false;
+    const record = value as Record<string, unknown>;
+
+    if (record.authenticated !== true) return false;
+    if (record.token_valid === false) return false;
+    if (
+        typeof record.expires_in_seconds === "number" &&
+        record.expires_in_seconds <= 0
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+function spotifyAuthStatusMessage(value: unknown): string {
+    if (!value || typeof value !== "object") return "Not authenticated";
+    const record = value as Record<string, unknown>;
+
+    if (
+        record.authenticated === true &&
+        typeof record.expires_in_seconds === "number" &&
+        record.expires_in_seconds <= 0
+    ) {
+        return "Authentication expired";
+    }
+
+    if (record.token_valid === false) {
+        return "Authentication token is invalid";
+    }
+
+    return "Not authenticated";
+}
+
 function extractAuthUrl(text: string): string | undefined {
     const urls = text.match(/https?:\/\/[^\s"'<>]+/g);
     if (!urls) return undefined;
@@ -605,6 +682,46 @@ async function withTimeout<T>(
     } finally {
         if (timer) clearTimeout(timer);
     }
+}
+
+async function waitForAuthCompletion(
+    config: AppConfig,
+    session: ActiveSpotifyAuth
+): Promise<CommandResult> {
+    return Promise.race([
+        session.closePromise,
+        waitForAuthenticatedStatus(config, session),
+    ]);
+}
+
+async function waitForAuthenticatedStatus(
+    config: AppConfig,
+    session: ActiveSpotifyAuth
+): Promise<CommandResult> {
+    while (activeAuth === session) {
+        await delay(1_000);
+
+        const status = await getSpotifyStatus(config);
+        if (!status.authenticated) continue;
+
+        if (activeAuth === session) {
+            activeAuth = null;
+        }
+        session.child.kill();
+
+        return {
+            ok: true,
+            code: 0,
+            stdout: session.output,
+            stderr: "",
+        };
+    }
+
+    return session.closePromise;
+}
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeCommandError(command: string, result: CommandResult): string {
