@@ -8,6 +8,7 @@ const INSTALL_SCRIPT_URL = "https://saveto.spotify.com/install.sh";
 const COMMAND_TIMEOUT_MS = 120_000;
 const AUTH_URL_TIMEOUT_MS = 30_000;
 const AUTH_COMPLETE_TIMEOUT_MS = 90_000;
+const INSTALL_DOWNLOAD_TIMEOUT_MS = 30_000;
 
 interface CommandResult {
     ok: boolean;
@@ -144,18 +145,28 @@ export async function installSaveToSpotify(
 
     let script: string;
     try {
-        const response = await fetch(INSTALL_SCRIPT_URL);
+        const controller = new AbortController();
+        const timeout = setTimeout(
+            () => controller.abort(),
+            INSTALL_DOWNLOAD_TIMEOUT_MS
+        );
+        const response = await fetch(INSTALL_SCRIPT_URL, {
+            signal: controller.signal,
+        }).finally(() => clearTimeout(timeout));
         if (!response.ok) {
             throw new Error(`HTTP ${response.status} ${response.statusText}`);
         }
         script = await response.text();
     } catch (err) {
+        const error = isAbortError(err)
+            ? `Download timed out after ${INSTALL_DOWNLOAD_TIMEOUT_MS}ms`
+            : formatError(err);
         return {
             ok: false,
             cliPath,
             stdout: "",
             stderr: "",
-            error: `Failed to download installer: ${formatError(err)}`,
+            error: `Failed to download installer: ${error}`,
         };
     }
 
@@ -743,4 +754,8 @@ function expandHome(path: string): string {
 
 function formatError(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+}
+
+function isAbortError(err: unknown): boolean {
+    return err instanceof Error && err.name === "AbortError";
 }
