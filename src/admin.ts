@@ -204,12 +204,15 @@ export function createAdminRouter(
       const current = getConfig();
       const result = await installSaveToSpotify(current);
 
-      if (result.ok) {
-        const merged = JSON.parse(JSON.stringify(current)) as AppConfig;
-        merged.spotify_upload = {
-          ...merged.spotify_upload,
-          cli_path: result.cliPath,
-        };
+        if (result.ok) {
+          const merged = JSON.parse(JSON.stringify(current)) as AppConfig;
+          merged.spotify_upload = {
+            enabled: merged.spotify_upload?.enabled ?? false,
+            language: merged.spotify_upload?.language ?? merged.feed.language ?? "sv",
+            wait_for_ready: merged.spotify_upload?.wait_for_ready ?? false,
+            ...merged.spotify_upload,
+            cli_path: result.cliPath,
+          };
         saveConfig(merged);
         setConfig(merged);
       }
@@ -1164,6 +1167,19 @@ function setSpotifyStatus(main, detail) {
   if (detailEl) detailEl.textContent = detail || '—';
 }
 
+function normalizeSpotifyAuthUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return null;
+  try {
+    const parsed = new URL(rawUrl);
+    const allowedHosts = new Set(['accounts.spotify.com', 'saveto.spotify.com']);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    if (!allowedHosts.has(parsed.hostname)) return null;
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 function resetSpotifyInstallButton(label = 'Install CLI') {
   const btn = document.getElementById('spotifyInstallBtn');
   if (!btn) return;
@@ -1227,14 +1243,15 @@ async function startSpotifyAuth() {
   try {
     const r = await apiFetch('/api/spotify/auth/start', { method: 'POST' });
     const result = await r.json();
-    if (r.ok && result.ok && result.authUrl) {
-      authLink.href = result.authUrl;
-      authLink.textContent = result.authUrl;
+    const authUrl = normalizeSpotifyAuthUrl(result.authUrl);
+    if (r.ok && result.ok && authUrl) {
+      authLink.href = authUrl;
+      authLink.textContent = authUrl;
       panel.classList.add('active');
       setSpotifyStatus('Spotify auth waiting', 'Paste the redirect URL below.');
       showToast('Spotify auth started');
     } else {
-      setSpotifyStatus('Spotify auth failed', result.error || result.output || 'No auth URL returned');
+      setSpotifyStatus('Spotify auth failed', result.error || result.output || 'No valid auth URL returned');
       showToast('Spotify auth failed', 'error');
     }
   } catch (e) {

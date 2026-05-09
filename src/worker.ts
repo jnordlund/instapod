@@ -136,7 +136,7 @@ async function processBookmark(
         };
 
         // 5. Optional Spotify upload
-        if (config.spotify_upload.enabled) {
+        if (config.spotify_upload?.enabled) {
             try {
                 console.log(`[worker] Uploading to Spotify: "${translatedTitle}"`);
                 processed.spotify = await uploadEpisodeToSpotify(config, {

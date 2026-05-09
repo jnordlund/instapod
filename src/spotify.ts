@@ -2,7 +2,11 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { AppConfig, SpotifyUploadState } from "./types.js";
+import type {
+    AppConfig,
+    SpotifyUploadConfig,
+    SpotifyUploadState,
+} from "./types.js";
 
 const INSTALL_SCRIPT_URL = "https://saveto.spotify.com/install.sh";
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -408,7 +412,7 @@ export async function uploadEpisodeToSpotify(
         source: string;
     }
 ): Promise<SpotifyUploadState> {
-    const spotify = config.spotify_upload;
+    const spotify = getSpotifyUploadConfig(config);
     const args = [
         "--json",
         "upload",
@@ -581,7 +585,7 @@ function formatSpotifySummary(
     config: AppConfig,
     input: { title: string; source: string }
 ): string {
-    const configured = config.spotify_upload.summary?.trim();
+    const configured = getSpotifyUploadConfig(config).summary?.trim();
     const template = configured || "Artikel från {{source}}";
     return template
         .replace(/\{\{title\}\}/g, input.title)
@@ -758,4 +762,14 @@ function formatError(err: unknown): string {
 
 function isAbortError(err: unknown): boolean {
     return err instanceof Error && err.name === "AbortError";
+}
+
+function getSpotifyUploadConfig(config: AppConfig): SpotifyUploadConfig {
+    return {
+        enabled: false,
+        cli_path: "save-to-spotify",
+        language: config.feed.language || "en",
+        wait_for_ready: false,
+        ...(config.spotify_upload ?? {}),
+    };
 }
