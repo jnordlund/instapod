@@ -6,6 +6,7 @@ import {
     getSpotifyStatus,
     installSaveToSpotify,
     startSpotifyHeadlessAuth,
+    updateSaveToSpotify,
     uploadEpisodeToSpotify,
 } from "../src/spotify.js";
 
@@ -64,7 +65,6 @@ const BASE_CONFIG: AppConfig = {
 
 afterEach(() => {
     cancelSpotifyHeadlessAuth();
-    delete process.env.INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
     spawnMock.mockReset();
@@ -91,12 +91,25 @@ describe("spotify integration helpers", () => {
                     child.emit("close", 0);
                 });
                 return child as never;
+            })
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit(
+                        "data",
+                        '{"latest_version":"1.2.3","update_available":false}'
+                    );
+                    child.emit("close", 0);
+                });
+                return child as never;
             });
 
         const status = await getSpotifyStatus(BASE_CONFIG);
         expect(status.installed).toBe(true);
         expect(status.authenticated).toBe(true);
         expect(status.version).toBe("1.2.3");
+        expect(status.latestVersion).toBe("1.2.3");
+        expect(status.updateAvailable).toBe(false);
     });
 
     it("extracts the Spotify auth URL from login command output", async () => {
@@ -162,17 +175,57 @@ describe("spotify integration helpers", () => {
         expect(state.uploadedAt).toBeTruthy();
     });
 
-    it("blocks installer script execution unless explicitly allowed", async () => {
-        const fetchMock = vi.fn();
+    it("runs the installer script from the admin install flow", async () => {
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            text: async () => "# installer",
+        });
         vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+        const child = new FakeChildProcess();
+        spawnMock.mockImplementationOnce(() => {
+            queueMicrotask(() => {
+                child.stdout.emit("data", "installed\n");
+                child.emit("close", 0);
+            });
+            return child as never;
+        });
 
         const result = await installSaveToSpotify(BASE_CONFIG);
 
         expect(result.ok).toBe(false);
         expect(result.error).toContain(
-            "Automatic CLI install is disabled by default for security."
+            "Installer completed, but /tmp/instapod-test/bin/save-to-spotify was not created."
         );
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(spawnMock).not.toHaveBeenCalled();
+        expect(fetchMock).toHaveBeenCalledWith(
+            "https://saveto.spotify.com/install.sh",
+            expect.any(Object)
+        );
+        expect(spawnMock).toHaveBeenCalledWith(
+            "bash",
+            ["-s", "--", "--dir", "/tmp/instapod-test/bin", "--no-skills"],
+            expect.any(Object)
+        );
+        expect(child.stdin.write).toHaveBeenCalledWith("# installer");
+    });
+
+    it("updates the installed CLI with the native update command", async () => {
+        spawnMock.mockImplementationOnce(() => {
+            const child = new FakeChildProcess();
+            queueMicrotask(() => {
+                child.stdout.emit("data", "updated\n");
+                child.emit("close", 0);
+            });
+            return child as never;
+        });
+
+        const result = await updateSaveToSpotify(BASE_CONFIG);
+
+        expect(result.ok).toBe(true);
+        expect(result.stdout).toBe("updated\n");
+        expect(spawnMock).toHaveBeenCalledWith(
+            "save-to-spotify",
+            ["update"],
+            expect.any(Object)
+        );
     });
 });
