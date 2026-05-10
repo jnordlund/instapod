@@ -71,43 +71,6 @@ filters:
 
 > **Tip:** Create a dedicated tag like `podd` or `listen` so you can selectively choose which articles become podcast episodes.
 
-## Exposing to the internet
-
-The feed must be reachable from the internet for podcast apps to fetch it. A few options:
-
-### Reverse proxy (recommended)
-
-Use Nginx, Caddy, Traefik etc to proxy requests to Instapod:
-
-```nginx
-# Nginx example
-server {
-    listen 443 ssl;
-    server_name pod.example.com;
-
-    location / {
-        proxy_pass http://localhost:8080;
-        proxy_set_header Host $host;
-    }
-}
-```
-
-Set `base_url` in `config.yaml` to your public URL:
-
-```yaml
-server:
-  base_url: "https://pod.example.com"
-```
-
-> **Important:** `base_url` must match the public URL — it's used to generate audio file links in the RSS feed.
-
-### Cloudflare Tunnel
-
-```bash
-cloudflared tunnel --url http://localhost:8080
-```
-
-
 ## Subscribing with a podcast app
 
 Once the feed is accessible, add it to your podcast app as a custom RSS feed:
@@ -183,7 +146,7 @@ Instapod supports Spotify by uploading generated MP3 episodes through Spotify's 
 Short setup:
 
 1. Open `/admin`
-2. Install `save-to-spotify` manually (recommended), or set `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1` and use **Install CLI**
+2. Use **Install CLI** if `save-to-spotify` is not already detected
 3. Use **Authenticate** and complete the browser login flow
 4. Enable **Upload new episodes to Spotify**
 5. Set `show_id` or `new_show`, then save the configuration
@@ -216,7 +179,7 @@ If `show_id` is empty, you can set `new_show` to create/use a named show. If bot
 | `GET` | `/audio/:filename` | Stream an episode MP3 |
 | `POST` | `/trigger` | Manually trigger a pipeline run |
 | `GET` | `/health` | Health check with episode count |
-| `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI (requires `INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL=1`) |
+| `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI |
 | `POST` | `/api/spotify/auth/start` | Start headless Spotify auth |
 | `POST` | `/api/spotify/auth/complete` | Complete headless Spotify auth |
 

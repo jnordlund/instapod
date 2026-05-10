@@ -15,6 +15,7 @@ import {
   getSpotifyStatus,
   installSaveToSpotify,
   startSpotifyHeadlessAuth,
+  updateSaveToSpotify,
 } from "./spotify.js";
 import {
   createIpFilter,
@@ -221,6 +222,16 @@ export function createAdminRouter(
     } catch (err) {
       console.error("[admin] Spotify install failed:", err);
       res.status(500).json({ error: "Failed to install Save to Spotify" });
+    }
+  });
+
+  router.post("/api/spotify/update", async (_req, res) => {
+    try {
+      const result = await updateSaveToSpotify(getConfig());
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify update failed:", err);
+      res.status(500).json({ error: "Failed to update Save to Spotify" });
     }
   });
 
@@ -474,6 +485,9 @@ header h1 {
 }
 .inline-status .main {
   font-weight: 600;
+}
+.inline-status.status-ok .main {
+  color: var(--success);
 }
 .inline-status .detail {
   color: var(--text2);
@@ -791,7 +805,7 @@ header h1 {
     <div class="card">
       <h2><span class="icon">♫</span> Spotify Upload</h2>
       <div class="form-grid">
-        <div class="inline-status" style="grid-column:1/-1;">
+        <div class="inline-status" id="spotifyStatus" style="grid-column:1/-1;">
           <div>
             <div class="main" id="spotifyStatusMain">Checking Spotify...</div>
             <div class="detail" id="spotifyStatusDetail">—</div>
@@ -1160,14 +1174,19 @@ async function triggerPipeline() {
 }
 
 // ── Spotify onboarding ──
-function setSpotifyStatus(main, detail) {
+function setSpotifyStatus(main, detail, variant = '') {
+  const statusEl = document.getElementById('spotifyStatus');
   const mainEl = document.getElementById('spotifyStatusMain');
   const detailEl = document.getElementById('spotifyStatusDetail');
+  if (statusEl) {
+    statusEl.classList.toggle('status-ok', variant === 'ok');
+  }
   if (mainEl) mainEl.textContent = main;
   if (detailEl) detailEl.textContent = detail || '—';
 }
 
 const ALLOWED_SPOTIFY_AUTH_HOSTS = new Set(['accounts.spotify.com', 'saveto.spotify.com']);
+let latestSpotifyStatus = null;
 
 function normalizeSpotifyAuthUrl(rawUrl) {
   if (typeof rawUrl !== 'string') return null;
@@ -1192,16 +1211,26 @@ async function loadSpotifyStatus() {
   try {
     const r = await apiFetch('/api/spotify/status');
     const status = await r.json();
-    resetSpotifyInstallButton(status.installed ? 'Reinstall CLI' : 'Install CLI');
+    latestSpotifyStatus = status;
+    resetSpotifyInstallButton(status.updateAvailable ? 'Update CLI' : status.installed ? 'Reinstall CLI' : 'Install CLI');
     if (!status.installed) {
       setSpotifyStatus('CLI not installed', status.message || status.cliPath || '');
       return;
     }
-    if (!status.authenticated) {
-      setSpotifyStatus('CLI installed, not authenticated', status.message || status.cliPath || '');
+    if (status.updateAvailable) {
+      const installed = status.installedVersion || status.version || 'installed';
+      const latest = status.latestVersion || 'latest';
+      setSpotifyStatus('CLI update available', installed + ' -> ' + latest);
       return;
     }
-    setSpotifyStatus('Spotify ready', status.cliPath || status.version || '');
+    if (!status.authenticated) {
+      const detail = status.updateCheckError
+        ? (status.message || status.cliPath || '') + ' (' + status.updateCheckError + ')'
+        : status.message || status.cliPath || '';
+      setSpotifyStatus('CLI installed, not authenticated', detail);
+      return;
+    }
+    setSpotifyStatus('Spotify ready', status.updateCheckError || status.cliPath || status.version || '', 'ok');
   } catch (e) {
     if (e.message !== 'auth') {
       resetSpotifyInstallButton();
@@ -1212,24 +1241,25 @@ async function loadSpotifyStatus() {
 
 async function installSpotify() {
   const btn = document.getElementById('spotifyInstallBtn');
-  btn.innerHTML = '<span class="spinner"></span> Installing...';
+  const shouldUpdate = latestSpotifyStatus?.installed && latestSpotifyStatus?.updateAvailable;
+  btn.innerHTML = '<span class="spinner"></span> ' + (shouldUpdate ? 'Updating...' : 'Installing...');
   btn.disabled = true;
-  setSpotifyStatus('Installing CLI...', '');
+  setSpotifyStatus(shouldUpdate ? 'Updating CLI...' : 'Installing CLI...', '');
   try {
-    const r = await apiFetch('/api/spotify/install', { method: 'POST' });
+    const r = await apiFetch(shouldUpdate ? '/api/spotify/update' : '/api/spotify/install', { method: 'POST' });
     const result = await r.json();
     if (r.ok && result.ok) {
       setValue('cfg-spotify-cli_path', result.cliPath);
-      showToast('Save to Spotify installed');
+      showToast(shouldUpdate ? 'Save to Spotify updated' : 'Save to Spotify installed');
       await loadConfig();
       await loadSpotifyStatus();
     } else {
-      setSpotifyStatus('Install failed', result.error || result.stderr || 'Unknown error');
-      showToast('Spotify install failed', 'error');
+      setSpotifyStatus(shouldUpdate ? 'Update failed' : 'Install failed', result.error || result.stderr || 'Unknown error');
+      showToast(shouldUpdate ? 'Spotify update failed' : 'Spotify install failed', 'error');
     }
   } catch (e) {
-    setSpotifyStatus('Install failed', e.message || String(e));
-    showToast('Spotify install failed', 'error');
+    setSpotifyStatus(shouldUpdate ? 'Update failed' : 'Install failed', e.message || String(e));
+    showToast(shouldUpdate ? 'Spotify update failed' : 'Spotify install failed', 'error');
   } finally {
     resetSpotifyInstallButton();
   }

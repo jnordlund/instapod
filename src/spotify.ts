@@ -13,7 +13,7 @@ const COMMAND_TIMEOUT_MS = 120_000;
 const AUTH_URL_TIMEOUT_MS = 30_000;
 const AUTH_COMPLETE_TIMEOUT_MS = 90_000;
 const INSTALL_DOWNLOAD_TIMEOUT_MS = 30_000;
-const UNVERIFIED_INSTALL_FLAG = "INSTAPOD_ALLOW_UNVERIFIED_SPOTIFY_INSTALL";
+const VERSION_CHECK_TIMEOUT_MS = 8_000;
 
 interface CommandResult {
     ok: boolean;
@@ -29,11 +29,23 @@ export interface SpotifyStatus {
     authenticated: boolean;
     cliPath: string;
     version?: string;
+    installedVersion?: string;
+    latestVersion?: string;
+    updateAvailable?: boolean;
+    updateCheckError?: string;
     authStatus?: unknown;
     message?: string;
 }
 
 export interface SpotifyInstallResult {
+    ok: boolean;
+    cliPath: string;
+    stdout: string;
+    stderr: string;
+    error?: string;
+}
+
+export interface SpotifyUpdateResult {
     ok: boolean;
     cliPath: string;
     stdout: string;
@@ -104,12 +116,24 @@ export async function getSpotifyStatus(config: AppConfig): Promise<SpotifyStatus
         timeoutMs: 20_000,
     });
     const authenticated = authResult.ok && isSpotifyAuthenticated(authResult.json);
+    const installedVersion = parseSaveToSpotifyVersion(versionResult.stdout);
+    const latestVersionResult = await checkLatestSaveToSpotifyVersion(config, cliPath);
+    const latestVersion = latestVersionResult.version;
+    const updateAvailable = Boolean(
+        installedVersion &&
+        latestVersion &&
+        compareVersions(installedVersion, latestVersion) < 0
+    );
 
     return {
         installed: true,
         authenticated,
         cliPath,
         version: versionResult.stdout.trim() || undefined,
+        installedVersion,
+        latestVersion,
+        updateAvailable,
+        updateCheckError: latestVersionResult.error,
         authStatus: authResult.json,
         message: authenticated
             ? "Authenticated"
@@ -140,6 +164,80 @@ function uniqueStrings(values: string[]): string[] {
     return unique;
 }
 
+async function checkLatestSaveToSpotifyVersion(
+    config: AppConfig,
+    cliPath: string
+): Promise<{
+    version?: string;
+    error?: string;
+}> {
+    const cliResult = await runCommand(cliPath, ["--json", "update", "--check"], {
+        env: buildSpotifyEnv(config, cliPath),
+        timeoutMs: VERSION_CHECK_TIMEOUT_MS,
+    });
+    const cliVersion = parseLatestVersionFromUpdateCheck(cliResult.json);
+    if (cliResult.ok && cliVersion) {
+        return { version: cliVersion };
+    }
+
+    return {
+        error: normalizeCommandError("update --check", cliResult),
+    };
+}
+
+function parseLatestVersionFromUpdateCheck(value: unknown): string | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const record = value as Record<string, unknown>;
+    const candidates = [
+        record.latest_version,
+        record.latestVersion,
+        record.latest,
+        record.version,
+    ];
+
+    for (const candidate of candidates) {
+        if (typeof candidate !== "string") continue;
+        const version = normalizeVersion(candidate);
+        if (version) return version;
+    }
+
+    return undefined;
+}
+
+function parseSaveToSpotifyVersion(output: string): string | undefined {
+    const match = output.match(/\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/);
+    return match ? normalizeVersion(match[1]) : undefined;
+}
+
+function normalizeVersion(version: string): string | undefined {
+    const match = version.trim().match(/^v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/);
+    return match?.[1];
+}
+
+function compareVersions(left: string, right: string): number {
+    const leftParts = versionNumbers(left);
+    const rightParts = versionNumbers(right);
+
+    for (let i = 0; i < 3; i++) {
+        const diff = leftParts[i] - rightParts[i];
+        if (diff !== 0) return diff;
+    }
+
+    return 0;
+}
+
+function versionNumbers(version: string): [number, number, number] {
+    const [major = "0", minor = "0", patch = "0"] = version
+        .split(/[+-]/, 1)[0]
+        .split(".");
+
+    return [
+        Number.parseInt(major, 10) || 0,
+        Number.parseInt(minor, 10) || 0,
+        Number.parseInt(patch, 10) || 0,
+    ];
+}
+
 export async function installSaveToSpotify(
     config: AppConfig
 ): Promise<SpotifyInstallResult> {
@@ -147,19 +245,6 @@ export async function installSaveToSpotify(
     const cliPath = defaultSpotifyCliPath(config);
 
     mkdirSync(installDir, { recursive: true });
-
-    if (!isTruthyEnv(process.env[UNVERIFIED_INSTALL_FLAG])) {
-        return {
-            ok: false,
-            cliPath,
-            stdout: "",
-            stderr: "",
-            error:
-                "Automatic CLI install is disabled by default for security. " +
-                "Install save-to-spotify manually, or set " +
-                `${UNVERIFIED_INSTALL_FLAG}=1 to explicitly allow the unverified installer script.`,
-        };
-    }
 
     let script: string;
     try {
@@ -217,6 +302,33 @@ export async function installSaveToSpotify(
             stdout: result.stdout,
             stderr: result.stderr,
             error: `Installer completed, but ${cliPath} was not created.`,
+        };
+    }
+
+    return {
+        ok: true,
+        cliPath,
+        stdout: result.stdout,
+        stderr: result.stderr,
+    };
+}
+
+export async function updateSaveToSpotify(
+    config: AppConfig
+): Promise<SpotifyUpdateResult> {
+    const cliPath = resolveSpotifyCliPath(config);
+    const result = await runCommand(cliPath, ["update"], {
+        env: buildSpotifyEnv(config, cliPath),
+        timeoutMs: 180_000,
+    });
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            cliPath,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: normalizeCommandError("update", result),
         };
     }
 
@@ -776,10 +888,6 @@ function formatError(err: unknown): string {
 
 function isAbortError(err: unknown): boolean {
     return err instanceof Error && err.name === "AbortError";
-}
-
-function isTruthyEnv(value: string | undefined): boolean {
-    return ["1", "true", "yes", "on"].includes((value ?? "").trim().toLowerCase());
 }
 
 function getSpotifyUploadConfig(config: AppConfig): SpotifyUploadConfig {
