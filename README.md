@@ -171,7 +171,11 @@ spotify_upload:
   wait_for_ready: false
 ```
 
-Instapod always passes `show_id` to `save-to-spotify` when it is configured. This matters when several shows have the same display name: `show_title` is only for the admin UI, while `show_id` decides where new episodes are uploaded. The older `new_show` field is only a legacy title hint: Instapod resolves or creates the show first, then uploads with the fixed show ID.
+Instapod always passes `show_id` to `save-to-spotify` when it is configured. This matters when several shows have the same display name: `show_title` is only for the admin UI, while `show_id` decides where new episodes are uploaded.
+
+The older `new_show` field is only a legacy title hint. If it is still present, Instapod lists existing shows first, reuses a matching show title when one exists, and only creates a new show when no match is found. The episode upload is still sent with a fixed `show_id`.
+
+The episode list shows Spotify upload state for each generated episode. Successful uploads are labeled `Spotify uploaded` in green, and failed uploads are labeled `Spotify upload failed` in red.
 
 ## API endpoints
 
