@@ -65,6 +65,7 @@ export interface SpotifyShow {
     id: string;
     title: string;
     createdAt?: string;
+    lastEpisodeUploadedAt?: string;
 }
 
 export interface SpotifyShowsResult {
@@ -652,10 +653,9 @@ export async function uploadEpisodeToSpotify(
         args.push("--summary", summary);
     }
 
-    if (spotify.show_id?.trim()) {
-        args.push("--show-id", spotify.show_id.trim());
-    } else if (spotify.new_show?.trim()) {
-        args.push("--new-show", spotify.new_show.trim());
+    const uploadShowId = await resolveSpotifyUploadShowId(config, spotify);
+    if (uploadShowId) {
+        args.push("--show-id", uploadShowId);
     }
 
     const language = spotify.language?.trim() || config.feed.language || "en";
@@ -679,7 +679,7 @@ export async function uploadEpisodeToSpotify(
         uploadedAt: new Date().toISOString(),
         episodeId: findStringValue(result.json, ["episode_id", "episodeId", "id"]),
         episodeUri: findStringValue(result.json, ["episode_uri", "episodeUri", "uri"]),
-        showId: findStringValue(result.json, ["show_id", "showId"]) ?? spotify.show_id?.trim(),
+        showId: findStringValue(result.json, ["show_id", "showId"]) ?? uploadShowId,
     };
 
     if (spotify.wait_for_ready) {
@@ -702,6 +702,46 @@ export async function uploadEpisodeToSpotify(
     }
 
     return state;
+}
+
+async function resolveSpotifyUploadShowId(
+    config: AppConfig,
+    spotify: SpotifyUploadConfig
+): Promise<string | undefined> {
+    const configuredShowId = spotify.show_id?.trim();
+    if (configuredShowId) return configuredShowId;
+
+    const legacyShowTitle = spotify.new_show?.trim();
+    if (!legacyShowTitle) return undefined;
+
+    const existingShow = await findReusableSpotifyShow(config, legacyShowTitle);
+    if (existingShow) return existingShow.id;
+
+    const created = await createSpotifyShow(config, { title: legacyShowTitle });
+    if (!created.ok || !created.show?.id) {
+        throw new Error(
+            `save-to-spotify shows create failed: ${created.error || "No show ID returned."}`
+        );
+    }
+
+    return created.show.id;
+}
+
+async function findReusableSpotifyShow(
+    config: AppConfig,
+    title: string
+): Promise<SpotifyShow | undefined> {
+    const listed = await listSpotifyShows(config);
+    if (!listed.ok) {
+        throw new Error(
+            `save-to-spotify shows failed: ${listed.error || "Could not list shows."}`
+        );
+    }
+
+    const normalizedTitle = normalizeSpotifyShowTitle(title);
+    return listed.shows
+        .filter((show) => normalizeSpotifyShowTitle(show.title) === normalizedTitle)
+        .sort(compareReusableSpotifyShows)[0];
 }
 
 function runSaveToSpotify(
@@ -910,11 +950,18 @@ function normalizeSpotifyShowRecord(
         "created_time",
         "createdTime",
     ]);
+    const lastEpisodeUploadedAt = readStringValue(record, [
+        "last_episode_uploaded_at",
+        "lastEpisodeUploadedAt",
+        "last_uploaded_at",
+        "lastUploadedAt",
+    ]);
 
     return {
         id,
         title,
         createdAt,
+        lastEpisodeUploadedAt,
     };
 }
 
@@ -957,6 +1004,42 @@ function uniqueSpotifyShows(shows: SpotifyShow[]): SpotifyShow[] {
     }
 
     return unique;
+}
+
+function normalizeSpotifyShowTitle(title: string): string {
+    return title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function compareReusableSpotifyShows(a: SpotifyShow, b: SpotifyShow): number {
+    const aRank = spotifyShowReuseRank(a);
+    const bRank = spotifyShowReuseRank(b);
+
+    if (aRank.hasEpisodeUpload !== bRank.hasEpisodeUpload) {
+        return bRank.hasEpisodeUpload - aRank.hasEpisodeUpload;
+    }
+
+    return bRank.timestamp - aRank.timestamp;
+}
+
+function spotifyShowReuseRank(show: SpotifyShow): {
+    hasEpisodeUpload: number;
+    timestamp: number;
+} {
+    const uploadTimestamp = parseSpotifyTimestamp(show.lastEpisodeUploadedAt);
+    if (uploadTimestamp !== undefined) {
+        return { hasEpisodeUpload: 1, timestamp: uploadTimestamp };
+    }
+
+    return {
+        hasEpisodeUpload: 0,
+        timestamp: parseSpotifyTimestamp(show.createdAt) ?? 0,
+    };
+}
+
+function parseSpotifyTimestamp(value?: string): number | undefined {
+    if (!value) return undefined;
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
 function looksLikeSpotifyShow(value: Record<string, unknown>): boolean {

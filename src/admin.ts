@@ -671,6 +671,15 @@ header h1 {
   gap: 12px;
   margin-top: 2px;
 }
+.spotify-episode-status {
+  font-weight: 500;
+}
+.spotify-episode-status.uploaded {
+  color: var(--success);
+}
+.spotify-episode-status.failed {
+  color: var(--danger);
+}
 .episode-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* Toast */
@@ -1207,6 +1216,13 @@ function formatSpotifyEpisodeStatus(spotify) {
   return '';
 }
 
+function formatSpotifyEpisodeStatusClass(spotify) {
+  if (!spotify) return '';
+  if (spotify.error) return ' failed';
+  if (spotify.episodeUri || spotify.episodeId) return ' uploaded';
+  return '';
+}
+
 // ── API calls ──
 async function apiFetch(url, opts = {}) {
   const r = await fetch(url, { credentials: 'include', ...opts });
@@ -1244,7 +1260,7 @@ async function loadEpisodes() {
             <span>⏱ \${formatDuration(ep.duration)}</span>
             <span>📅 \${formatDate(ep.pubDate)}</span>
             <span>🔗 \${escapeHtml(ep.source || '')}</span>
-            <span>\${escapeHtml(formatSpotifyEpisodeStatus(ep.spotify))}</span>
+            <span class="spotify-episode-status\${formatSpotifyEpisodeStatusClass(ep.spotify)}">\${escapeHtml(formatSpotifyEpisodeStatus(ep.spotify))}</span>
           </div>
         </div>
         <div class="episode-actions">

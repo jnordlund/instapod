@@ -171,7 +171,7 @@ spotify_upload:
   wait_for_ready: false
 ```
 
-Instapod always passes `show_id` to `save-to-spotify` when it is configured. This matters when several shows have the same display name: `show_title` is only for the admin UI, while `show_id` decides where new episodes are uploaded. The older `new_show` fallback is still supported, but the admin UI prefers selecting or creating a show first so the fixed ID is saved.
+Instapod always passes `show_id` to `save-to-spotify` when it is configured. This matters when several shows have the same display name: `show_title` is only for the admin UI, while `show_id` decides where new episodes are uploaded. The older `new_show` field is only a legacy title hint: Instapod resolves or creates the show first, then uploads with the fixed show ID.
 
 ## API endpoints
 

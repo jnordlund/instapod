@@ -27,7 +27,7 @@ spotify_upload:
   cli_path: "save-to-spotify"
   # show_id: "spotify:show:..."
   # show_title: "Mina Artiklar"  # display name only; show_id is used for upload routing
-  # new_show: "Mina Artiklar"    # legacy fallback; prefer selecting/creating a show in Admin
+  # new_show: "Mina Artiklar"    # legacy title hint; Instapod resolves it to a fixed show_id before upload
   language: "sv"
   summary: "Artikel från {{source}}"
   # image_path: "/data/cover.png"

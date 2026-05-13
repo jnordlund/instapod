@@ -213,6 +213,134 @@ describe("spotify integration helpers", () => {
         expect(state.showId).toBe("spotify:show:fixed");
     });
 
+    it("resolves legacy new_show to an existing show ID before upload", async () => {
+        spawnMock
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit(
+                        "data",
+                        JSON.stringify({
+                            shows: [
+                                {
+                                    show_uri: "spotify:show:new-empty",
+                                    title: "Mina artiklar",
+                                    created_at: "2026-05-13T15:20:43.678Z",
+                                },
+                                {
+                                    show_uri: "spotify:show:active",
+                                    title: "Mina artiklar",
+                                    created_at: "2026-05-13T15:09:36.370Z",
+                                    last_episode_uploaded_at:
+                                        "2026-05-13T15:09:40.489Z",
+                                },
+                            ],
+                        })
+                    );
+                    child.emit("close", 0);
+                });
+                return child as never;
+            })
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit(
+                        "data",
+                        '{"episode_id":"ep_123","episode_uri":"spotify:episode:ep_123"}'
+                    );
+                    child.emit("close", 0);
+                });
+                return child as never;
+            });
+
+        const config: AppConfig = {
+            ...BASE_CONFIG,
+            spotify_upload: {
+                ...BASE_CONFIG.spotify_upload!,
+                new_show: "Mina artiklar",
+            },
+        };
+
+        const state = await uploadEpisodeToSpotify(config, {
+            filePath: "/tmp/audio.mp3",
+            title: "Example",
+            source: "example.com",
+        });
+
+        expect(spawnMock.mock.calls[0][1]).toEqual(["--json", "shows"]);
+        const uploadArgs = spawnMock.mock.calls[1][1] as string[];
+        expect(uploadArgs).toContain("--show-id");
+        expect(uploadArgs).toContain("spotify:show:active");
+        expect(uploadArgs).not.toContain("--new-show");
+        expect(state.showId).toBe("spotify:show:active");
+    });
+
+    it("creates a legacy new_show separately and uploads with the returned show ID", async () => {
+        spawnMock
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit("data", '{"shows":[]}');
+                    child.emit("close", 0);
+                });
+                return child as never;
+            })
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit(
+                        "data",
+                        '{"show_uri":"spotify:show:created","title":"Mina artiklar"}'
+                    );
+                    child.emit("close", 0);
+                });
+                return child as never;
+            })
+            .mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit(
+                        "data",
+                        '{"episode_id":"ep_123","episode_uri":"spotify:episode:ep_123"}'
+                    );
+                    child.emit("close", 0);
+                });
+                return child as never;
+            });
+
+        const config: AppConfig = {
+            ...BASE_CONFIG,
+            spotify_upload: {
+                ...BASE_CONFIG.spotify_upload!,
+                new_show: "Mina artiklar",
+            },
+        };
+
+        const state = await uploadEpisodeToSpotify(config, {
+            filePath: "/tmp/audio.mp3",
+            title: "Example",
+            source: "example.com",
+        });
+
+        expect(spawnMock.mock.calls[0][1]).toEqual(["--json", "shows"]);
+        expect(spawnMock.mock.calls[1][1]).toEqual([
+            "--json",
+            "shows",
+            "create",
+            "--title",
+            "Mina artiklar",
+            "--summary",
+            "A test feed",
+            "--language",
+            "sv",
+        ]);
+        const uploadArgs = spawnMock.mock.calls[2][1] as string[];
+        expect(uploadArgs).toContain("--show-id");
+        expect(uploadArgs).toContain("spotify:show:created");
+        expect(uploadArgs).not.toContain("--new-show");
+        expect(state.showId).toBe("spotify:show:created");
+    });
+
     it("lists Spotify shows from JSON output", async () => {
         spawnMock.mockImplementationOnce(() => {
             const child = new FakeChildProcess();
