@@ -12,8 +12,10 @@ import {
 import {
   cancelSpotifyHeadlessAuth,
   completeSpotifyHeadlessAuth,
+  createSpotifyShow,
   getSpotifyStatus,
   installSaveToSpotify,
+  listSpotifyShows,
   startSpotifyHeadlessAuth,
   updateSaveToSpotify,
 } from "./spotify.js";
@@ -263,6 +265,31 @@ export function createAdminRouter(
     res.json(result);
   });
 
+  router.get("/api/spotify/shows", async (_req, res) => {
+    try {
+      const result = await listSpotifyShows(getConfig());
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify shows list failed:", err);
+      res.status(500).json({ ok: false, shows: [], error: "Failed to list Spotify shows" });
+    }
+  });
+
+  router.post("/api/spotify/shows", async (req, res) => {
+    try {
+      const title = String(req.body?.title ?? "").trim();
+      if (!title) {
+        return res.status(400).json({ ok: false, error: "Show title is required" });
+      }
+
+      const result = await createSpotifyShow(getConfig(), { title });
+      res.status(result.ok ? 200 : 500).json(result);
+    } catch (err) {
+      console.error("[admin] Spotify show create failed:", err);
+      res.status(500).json({ ok: false, error: "Failed to create Spotify show" });
+    }
+  });
+
   // ── API: Trigger pipeline ──
   router.post("/api/trigger", (_req, res) => {
     res.json({ status: "started", message: "Pipeline run triggered" });
@@ -509,6 +536,115 @@ header h1 {
   margin-bottom: 10px;
   color: var(--accent2);
   word-break: break-all;
+}
+.show-picker-row {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+}
+.selected-show {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.selected-show .title {
+  font-weight: 600;
+  color: var(--text);
+}
+.selected-show .id {
+  margin-top: 2px;
+  color: var(--text2);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15,17,23,0.78);
+  z-index: 90;
+}
+.modal-backdrop.active { display: flex; }
+.modal {
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  box-shadow: 0 20px 80px rgba(0,0,0,0.4);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.modal-header h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+.modal-section {
+  padding-top: 16px;
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.modal-section h3 {
+  margin-bottom: 10px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.show-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.show-option {
+  width: 100%;
+  display: block;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.show-option:hover {
+  border-color: var(--accent);
+}
+.show-option.selected {
+  border-color: var(--accent);
+  background: rgba(108,99,255,0.16);
+}
+.show-option .title {
+  font-weight: 600;
+}
+.show-option .detail {
+  margin-top: 2px;
+  color: var(--text2);
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+@media (max-width: 600px) {
+  .show-picker-row { flex-direction: column; }
+  .modal { padding: 16px; }
 }
 
 /* Episode list */
@@ -846,13 +982,19 @@ header h1 {
           <label>Language</label>
           <input type="text" id="cfg-spotify-language" placeholder="sv">
         </div>
-        <div class="form-group">
-          <label>Show ID / URI</label>
-          <input type="text" id="cfg-spotify-show_id" placeholder="spotify:show:...">
-        </div>
-        <div class="form-group">
-          <label>New Show Title</label>
-          <input type="text" id="cfg-spotify-new_show" placeholder="Mina Artiklar">
+        <div class="form-group full">
+          <label>Spotify Show</label>
+          <div class="show-picker-row">
+            <div class="selected-show" id="spotifySelectedShow">
+              <div class="title" id="spotifySelectedShowTitle">No show selected</div>
+              <div class="id" id="spotifySelectedShowId">Choose an existing show or enter a show ID.</div>
+            </div>
+            <button type="button" class="btn btn-ghost" onclick="openSpotifyShowModal()">Choose Show</button>
+          </div>
+          <input type="hidden" id="cfg-spotify-show_id">
+          <input type="hidden" id="cfg-spotify-show_title">
+          <input type="hidden" id="cfg-spotify-new_show">
+          <div class="form-help">Uploads use the saved show ID so duplicate show names still route to one exact show.</div>
         </div>
         <div class="form-group full">
           <label>Summary Template</label>
@@ -959,11 +1101,58 @@ header h1 {
 
 <div class="toast" id="toast"></div>
 
+<div class="modal-backdrop" id="spotifyShowModal" role="dialog" aria-modal="true" aria-labelledby="spotifyShowModalTitle" onclick="onSpotifyShowBackdropClick(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="spotifyShowModalTitle">Choose Spotify Show</h2>
+      <button type="button" class="btn btn-ghost btn-sm" onclick="closeSpotifyShowModal()">Close</button>
+    </div>
+
+    <div class="form-group full">
+      <label>Existing Shows</label>
+      <div class="show-list" id="spotifyShowsList">
+        <div class="empty-state">Open this dialog after Spotify authentication to list shows.</div>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <h3>Use Show ID / URI</h3>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Display Name</label>
+          <input type="text" id="spotifyManualShowTitle" placeholder="Instapod jnordlund">
+        </div>
+        <div class="form-group">
+          <label>Show ID / URI</label>
+          <input type="text" id="spotifyManualShowId" placeholder="spotify:show:...">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="useManualSpotifyShow()">Use This Show</button>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <h3>Create New Show</h3>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Show Title</label>
+          <input type="text" id="spotifyCreateShowTitle" placeholder="Instapod jnordlund">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary btn-sm" id="spotifyCreateShowBtn" onclick="createSpotifyShowFromModal()">Create and Select</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 // ── State ──
 let currentConfig = null;
 let logEntries = [];
 let latestLogId = 0;
+let spotifyShowsCache = [];
 
 // ── Tab switching ──
 function switchTab(name) {
@@ -1337,6 +1526,186 @@ async function cancelSpotifyAuth() {
   loadSpotifyStatus();
 }
 
+// ── Spotify show picker ──
+function renderSelectedSpotifyShow() {
+  const showId = getValue('cfg-spotify-show_id').trim();
+  const showTitle = getValue('cfg-spotify-show_title').trim();
+  const newShow = getValue('cfg-spotify-new_show').trim();
+  const titleEl = document.getElementById('spotifySelectedShowTitle');
+  const idEl = document.getElementById('spotifySelectedShowId');
+  if (!titleEl || !idEl) return;
+
+  if (showId) {
+    titleEl.textContent = showTitle || showId;
+    idEl.textContent = showId;
+    return;
+  }
+
+  if (newShow) {
+    titleEl.textContent = newShow;
+    idEl.textContent = 'Will create a new show on upload; choose or create a fixed show ID to avoid duplicates.';
+    return;
+  }
+
+  titleEl.textContent = 'No show selected';
+  idEl.textContent = 'Choose an existing show or enter a show ID.';
+}
+
+function normalizeSpotifyShowId(rawValue) {
+  const value = String(rawValue || '').trim();
+  if (!value) return '';
+
+  try {
+    const parsed = new URL(value);
+    const match = parsed.pathname.match(/^\\/show\\/([^/]+)/);
+    if (match && (parsed.hostname === 'open.spotify.com' || parsed.hostname.endsWith('.spotify.com'))) {
+      return 'spotify:show:' + match[1];
+    }
+  } catch {}
+
+  return value;
+}
+
+function setSpotifyShowSelection(show) {
+  const id = normalizeSpotifyShowId(show?.id);
+  if (!id) {
+    showToast('Show ID is required', 'error');
+    return;
+  }
+
+  setValue('cfg-spotify-show_id', id);
+  setValue('cfg-spotify-show_title', show?.title || id);
+  setValue('cfg-spotify-new_show', '');
+  renderSelectedSpotifyShow();
+}
+
+function openSpotifyShowModal() {
+  const modal = document.getElementById('spotifyShowModal');
+  if (!modal) return;
+  setValue('spotifyManualShowTitle', getValue('cfg-spotify-show_title'));
+  setValue('spotifyManualShowId', getValue('cfg-spotify-show_id'));
+  modal.classList.add('active');
+  loadSpotifyShows();
+}
+
+function closeSpotifyShowModal() {
+  const modal = document.getElementById('spotifyShowModal');
+  if (modal) modal.classList.remove('active');
+}
+
+function onSpotifyShowBackdropClick(event) {
+  if (event.target && event.target.id === 'spotifyShowModal') {
+    closeSpotifyShowModal();
+  }
+}
+
+async function loadSpotifyShows() {
+  const list = document.getElementById('spotifyShowsList');
+  if (!list) return;
+  list.innerHTML = '<div class="empty-state">Loading shows...</div>';
+
+  try {
+    const r = await apiFetch('/api/spotify/shows');
+    const result = await r.json();
+    if (!r.ok || !result.ok) {
+      list.innerHTML = '<div class="empty-state">' + escapeHtml(result.error || 'Failed to list shows') + '</div>';
+      return;
+    }
+
+    spotifyShowsCache = Array.isArray(result.shows) ? result.shows : [];
+    renderSpotifyShows();
+  } catch (e) {
+    if (e.message !== 'auth') {
+      list.innerHTML = '<div class="empty-state">' + escapeHtml(e.message || String(e)) + '</div>';
+    }
+  }
+}
+
+function renderSpotifyShows() {
+  const list = document.getElementById('spotifyShowsList');
+  if (!list) return;
+
+  if (spotifyShowsCache.length === 0) {
+    list.innerHTML = '<div class="empty-state">No shows found.</div>';
+    return;
+  }
+
+  const selectedId = getValue('cfg-spotify-show_id').trim();
+  list.innerHTML = spotifyShowsCache.map((show, index) => {
+    const id = normalizeSpotifyShowId(show.id);
+    const createdAt = formatSpotifyShowDate(show.createdAt);
+    const detail = id + (createdAt ? ' - ' + createdAt : '');
+    const selectedClass = id === selectedId ? ' selected' : '';
+    return '<button type="button" class="show-option' + selectedClass + '" onclick="selectSpotifyShowFromList(' + index + ')">' +
+      '<div class="title">' + escapeHtml(show.title || id) + '</div>' +
+      '<div class="detail">' + escapeHtml(detail) + '</div>' +
+      '</button>';
+  }).join('');
+}
+
+function formatSpotifyShowDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleDateString('sv-SE') + ' ' + date.toLocaleTimeString('sv-SE', { hour: '2-digit', minute: '2-digit' });
+}
+
+function selectSpotifyShowFromList(index) {
+  const show = spotifyShowsCache[index];
+  if (!show) return;
+  setSpotifyShowSelection(show);
+  renderSpotifyShows();
+  showToast('Spotify show selected. Save configuration to keep it.');
+  closeSpotifyShowModal();
+}
+
+function useManualSpotifyShow() {
+  const id = normalizeSpotifyShowId(getValue('spotifyManualShowId'));
+  const title = getValue('spotifyManualShowTitle').trim() || id;
+  if (!id) {
+    showToast('Show ID is required', 'error');
+    return;
+  }
+
+  setSpotifyShowSelection({ id, title });
+  renderSpotifyShows();
+  showToast('Spotify show selected. Save configuration to keep it.');
+  closeSpotifyShowModal();
+}
+
+async function createSpotifyShowFromModal() {
+  const btn = document.getElementById('spotifyCreateShowBtn');
+  const title = getValue('spotifyCreateShowTitle').trim();
+  if (!title) {
+    showToast('Show title is required', 'error');
+    return;
+  }
+
+  btn.innerHTML = '<span class="spinner"></span> Creating...';
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/spotify/shows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    const result = await r.json();
+    if (r.ok && result.ok && result.show?.id) {
+      setSpotifyShowSelection(result.show);
+      setValue('spotifyCreateShowTitle', '');
+      showToast('Spotify show created. Save configuration to keep it.');
+      closeSpotifyShowModal();
+    } else {
+      showToast(result.error || 'Failed to create show', 'error');
+    }
+  } catch (e) {
+    showToast(e.message || String(e), 'error');
+  } finally {
+    btn.innerHTML = 'Create and Select';
+    btn.disabled = false;
+  }
+}
+
 // ── Config form ──
 async function loadConfig() {
   try {
@@ -1483,10 +1852,12 @@ function populateForm(c) {
   setValue('cfg-spotify-cli_path', c.spotify_upload?.cli_path);
   setValue('cfg-spotify-language', c.spotify_upload?.language);
   setValue('cfg-spotify-show_id', c.spotify_upload?.show_id);
+  setValue('cfg-spotify-show_title', c.spotify_upload?.show_title);
   setValue('cfg-spotify-new_show', c.spotify_upload?.new_show);
   setValue('cfg-spotify-summary', c.spotify_upload?.summary);
   setValue('cfg-spotify-image_path', c.spotify_upload?.image_path);
   setChecked('cfg-spotify-wait_for_ready', c.spotify_upload?.wait_for_ready);
+  renderSelectedSpotifyShow();
   syncScheduleUiFromCron(c.schedule?.cron);
   setValue('cfg-server-port', c.server?.port);
   setValue('cfg-server-base_url', c.server?.base_url);
@@ -1555,6 +1926,7 @@ async function saveConfigForm() {
       enabled: getChecked('cfg-spotify-enabled'),
       cli_path: getValue('cfg-spotify-cli_path') || 'save-to-spotify',
       show_id: getValue('cfg-spotify-show_id') || undefined,
+      show_title: getValue('cfg-spotify-show_title') || undefined,
       new_show: getValue('cfg-spotify-new_show') || undefined,
       language: getValue('cfg-spotify-language') || currentConfig?.feed?.language || 'sv',
       summary: getValue('cfg-spotify-summary') || undefined,
@@ -1606,6 +1978,12 @@ async function doLogout() {
   await fetch('/api/admin/logout', { method: 'POST' });
   window.location.href = '/admin';
 }
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    closeSpotifyShowModal();
+  }
+});
 
 // ── Init ──
 loadStatus();

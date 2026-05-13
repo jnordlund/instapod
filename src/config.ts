@@ -43,6 +43,7 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         SPOTIFY_UPLOAD_ENABLED: "spotify_upload.enabled",
         SPOTIFY_UPLOAD_CLI_PATH: "spotify_upload.cli_path",
         SPOTIFY_UPLOAD_SHOW_ID: "spotify_upload.show_id",
+        SPOTIFY_UPLOAD_SHOW_TITLE: "spotify_upload.show_title",
         SPOTIFY_UPLOAD_NEW_SHOW: "spotify_upload.new_show",
         SPOTIFY_UPLOAD_LANGUAGE: "spotify_upload.language",
         SPOTIFY_UPLOAD_SUMMARY: "spotify_upload.summary",

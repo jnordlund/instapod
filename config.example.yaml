@@ -26,7 +26,8 @@ spotify_upload:
   enabled: false
   cli_path: "save-to-spotify"
   # show_id: "spotify:show:..."
-  # new_show: "Mina Artiklar"
+  # show_title: "Mina Artiklar"  # display name only; show_id is used for upload routing
+  # new_show: "Mina Artiklar"    # legacy fallback; prefer selecting/creating a show in Admin
   language: "sv"
   summary: "Artikel från {{source}}"
   # image_path: "/data/cover.png"

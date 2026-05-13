@@ -61,6 +61,28 @@ export interface SpotifyAuthResult {
     error?: string;
 }
 
+export interface SpotifyShow {
+    id: string;
+    title: string;
+    createdAt?: string;
+}
+
+export interface SpotifyShowsResult {
+    ok: boolean;
+    shows: SpotifyShow[];
+    stdout: string;
+    stderr: string;
+    error?: string;
+}
+
+export interface SpotifyShowCreateResult {
+    ok: boolean;
+    show?: SpotifyShow;
+    stdout: string;
+    stderr: string;
+    error?: string;
+}
+
 interface ActiveSpotifyAuth {
     child: ChildProcessWithoutNullStreams;
     output: string;
@@ -530,6 +552,84 @@ export function cancelSpotifyHeadlessAuth(): SpotifyAuthResult {
     };
 }
 
+export async function listSpotifyShows(
+    config: AppConfig
+): Promise<SpotifyShowsResult> {
+    const result = await runSaveToSpotify(config, ["--json", "shows"], {
+        timeoutMs: 30_000,
+    });
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            shows: [],
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: normalizeCommandError("shows", result),
+        };
+    }
+
+    return {
+        ok: true,
+        shows: parseSpotifyShows(result.json, result.stdout),
+        stdout: result.stdout,
+        stderr: result.stderr,
+    };
+}
+
+export async function createSpotifyShow(
+    config: AppConfig,
+    input: { title: string }
+): Promise<SpotifyShowCreateResult> {
+    const title = input.title.trim();
+    if (!title) {
+        return {
+            ok: false,
+            stdout: "",
+            stderr: "",
+            error: "Show title is required.",
+        };
+    }
+
+    const spotify = getSpotifyUploadConfig(config);
+    const args = ["--json", "shows", "create", "--title", title];
+    const summary = config.feed.description?.trim();
+    if (summary) {
+        args.push("--summary", summary);
+    }
+
+    const language = spotify.language?.trim() || config.feed.language || "en";
+    if (language) {
+        args.push("--language", language);
+    }
+
+    if (spotify.image_path?.trim()) {
+        args.push("--image", expandHome(spotify.image_path.trim()));
+    }
+
+    const result = await runSaveToSpotify(config, args, {
+        timeoutMs: COMMAND_TIMEOUT_MS,
+    });
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: normalizeCommandError("shows create", result),
+        };
+    }
+
+    const show = parseSpotifyShow(result.json) ?? parseSpotifyShows(result.json, result.stdout)[0];
+    return {
+        ok: Boolean(show),
+        show,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        error: show ? undefined : "Show was created, but no show ID was returned.",
+    };
+}
+
 export async function uploadEpisodeToSpotify(
     config: AppConfig,
     input: {
@@ -579,7 +679,7 @@ export async function uploadEpisodeToSpotify(
         uploadedAt: new Date().toISOString(),
         episodeId: findStringValue(result.json, ["episode_id", "episodeId", "id"]),
         episodeUri: findStringValue(result.json, ["episode_uri", "episodeUri", "uri"]),
-        showId: findStringValue(result.json, ["show_id", "showId"]),
+        showId: findStringValue(result.json, ["show_id", "showId"]) ?? spotify.show_id?.trim(),
     };
 
     if (spotify.wait_for_ready) {
@@ -725,17 +825,161 @@ function parseJsonOutput(stdout: string): unknown | undefined {
     try {
         return JSON.parse(trimmed);
     } catch {
-        const first = trimmed.indexOf("{");
-        const last = trimmed.lastIndexOf("}");
-        if (first >= 0 && last > first) {
+        const objectCandidate = jsonSubstring(trimmed, "{", "}");
+        if (objectCandidate) {
             try {
-                return JSON.parse(trimmed.slice(first, last + 1));
+                return JSON.parse(objectCandidate);
+            } catch {
+                // Try an array payload below.
+            }
+        }
+
+        const arrayCandidate = jsonSubstring(trimmed, "[", "]");
+        if (arrayCandidate) {
+            try {
+                return JSON.parse(arrayCandidate);
             } catch {
                 return undefined;
             }
         }
         return undefined;
     }
+}
+
+function jsonSubstring(value: string, open: string, close: string): string | undefined {
+    const first = value.indexOf(open);
+    const last = value.lastIndexOf(close);
+    if (first < 0 || last <= first) return undefined;
+    return value.slice(first, last + 1);
+}
+
+function parseSpotifyShows(value: unknown, stdout: string): SpotifyShow[] {
+    const parsed = extractSpotifyShowRecords(value)
+        .map(normalizeSpotifyShowRecord)
+        .filter((show): show is SpotifyShow => Boolean(show));
+
+    const shows = parsed.length > 0 ? parsed : parseSpotifyShowsText(stdout);
+    return uniqueSpotifyShows(shows);
+}
+
+function parseSpotifyShow(value: unknown): SpotifyShow | undefined {
+    return parseSpotifyShows(value, "")[0];
+}
+
+function extractSpotifyShowRecords(value: unknown): Record<string, unknown>[] {
+    if (Array.isArray(value)) {
+        return value.filter(isRecordValue);
+    }
+
+    if (!isRecordValue(value)) {
+        return [];
+    }
+
+    const candidates = [value.shows, value.items, value.results, value.data];
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            return candidate.filter(isRecordValue);
+        }
+    }
+
+    if (isRecordValue(value.show)) {
+        return [value.show];
+    }
+
+    return looksLikeSpotifyShow(value) ? [value] : [];
+}
+
+function normalizeSpotifyShowRecord(
+    record: Record<string, unknown>
+): SpotifyShow | undefined {
+    const id = readStringValue(record, [
+        "id",
+        "show_id",
+        "showId",
+        "uri",
+        "show_uri",
+        "showUri",
+    ]);
+    if (!id) return undefined;
+
+    const title = readStringValue(record, ["title", "name", "show_title", "showTitle"]) || id;
+    const createdAt = readStringValue(record, [
+        "created_at",
+        "createdAt",
+        "created",
+        "created_time",
+        "createdTime",
+    ]);
+
+    return {
+        id,
+        title,
+        createdAt,
+    };
+}
+
+function parseSpotifyShowsText(stdout: string): SpotifyShow[] {
+    const shows: SpotifyShow[] = [];
+
+    for (const line of stdout.split(/\r?\n/)) {
+        const datedMatch = line.match(
+            /^\s*(spotify:show:\S+)\s+(.+?)\s+(\d{4}-\d{2}-\d{2}T\S+)\s*$/
+        );
+        if (datedMatch) {
+            shows.push({
+                id: datedMatch[1],
+                title: datedMatch[2].trim(),
+                createdAt: datedMatch[3],
+            });
+            continue;
+        }
+
+        const simpleMatch = line.match(/^\s*(spotify:show:\S+)\s+(.+?)\s*$/);
+        if (simpleMatch) {
+            shows.push({
+                id: simpleMatch[1],
+                title: simpleMatch[2].trim(),
+            });
+        }
+    }
+
+    return shows;
+}
+
+function uniqueSpotifyShows(shows: SpotifyShow[]): SpotifyShow[] {
+    const seen = new Set<string>();
+    const unique: SpotifyShow[] = [];
+
+    for (const show of shows) {
+        if (seen.has(show.id)) continue;
+        seen.add(show.id);
+        unique.push(show);
+    }
+
+    return unique;
+}
+
+function looksLikeSpotifyShow(value: Record<string, unknown>): boolean {
+    return Boolean(
+        readStringValue(value, ["id", "show_id", "showId", "uri", "show_uri", "showUri"])
+    );
+}
+
+function readStringValue(
+    record: Record<string, unknown>,
+    keys: string[]
+): string | undefined {
+    for (const key of keys) {
+        const candidate = record[key];
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+            return candidate.trim();
+        }
+    }
+    return undefined;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findStringValue(value: unknown, keys: string[]): string | undefined {

@@ -99,7 +99,7 @@ See [`config.example.yaml`](config.example.yaml) for all options:
 | `translation` | `api_base`, `api_key`, `model` | OpenAI-compatible translation API |
 | `translation` | `target_language`, `skip_if_same`, `title_prompt`, `text_prompt` | Target language, language-skip, and translation prompt templates |
 | `tts` | `voice`, `rate`, `pitch` | Edge TTS voice settings |
-| `spotify_upload` | `enabled`, `cli_path`, `show_id`, `new_show`, `language`, `summary`, `image_path`, `wait_for_ready` | Optional upload to Spotify via `save-to-spotify` |
+| `spotify_upload` | `enabled`, `cli_path`, `show_id`, `show_title`, `new_show`, `language`, `summary`, `image_path`, `wait_for_ready` | Optional upload to Spotify via `save-to-spotify` |
 | `schedule` | `cron` | How often to check for new articles |
 | `server` | `port`, `base_url` | HTTP server port and public URL for feed links |
 | `feed` | `title`, `description`, `author`, `image` | Podcast feed metadata |
@@ -149,7 +149,8 @@ Short setup:
 2. Use **Install CLI** if `save-to-spotify` is not already detected
 3. Use **Authenticate** and complete the browser login flow
 4. Enable **Upload new episodes to Spotify**
-5. Set `show_id` or `new_show`, then save the configuration
+5. Use **Choose Show** to list existing Spotify shows, select the exact show ID, or create a new show
+6. Save the configuration
 
 Headless auth uses:
 
@@ -164,12 +165,13 @@ spotify_upload:
   enabled: true
   cli_path: "/data/bin/save-to-spotify"
   show_id: "spotify:show:..."
+  show_title: "Instapod jnordlund"
   language: "sv"
   summary: "Artikel från {{source}}"
   wait_for_ready: false
 ```
 
-If `show_id` is empty, you can set `new_show` to create/use a named show. If both are empty, the CLI uses its most recent show or creates one.
+Instapod always passes `show_id` to `save-to-spotify` when it is configured. This matters when several shows have the same display name: `show_title` is only for the admin UI, while `show_id` decides where new episodes are uploaded. The older `new_show` fallback is still supported, but the admin UI prefers selecting or creating a show first so the fixed ID is saved.
 
 ## API endpoints
 
@@ -182,6 +184,8 @@ If `show_id` is empty, you can set `new_show` to create/use a named show. If bot
 | `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI |
 | `POST` | `/api/spotify/auth/start` | Start headless Spotify auth |
 | `POST` | `/api/spotify/auth/complete` | Complete headless Spotify auth |
+| `GET` | `/api/spotify/shows` | List Spotify shows available to the authenticated CLI |
+| `POST` | `/api/spotify/shows` | Create a Spotify show and return its fixed show ID |
 
 ## Architecture
 
