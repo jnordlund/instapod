@@ -3,7 +3,7 @@ import { unlinkSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
-import { saveConfig } from "./config.js";
+import { ConfigValidationError, saveConfig, validateConfig } from "./config.js";
 import { addLog, getLogs } from "./logs.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
@@ -87,36 +87,21 @@ export function createAdminRouter(
     try {
       const updates = req.body as Partial<AppConfig>;
       const current = getConfig();
-
-      // Deep merge updates into current config
-      const merged = deepMerge(
-        JSON.parse(JSON.stringify(current)),
-        updates
-      ) as AppConfig;
-
-      // Don't overwrite masked fields
-      if (updates.instapaper?.password === "••••••••") {
-        merged.instapaper.password = current.instapaper.password;
-      }
-      if (updates.instapaper?.consumer_secret === "••••••••") {
-        merged.instapaper.consumer_secret = current.instapaper.consumer_secret;
-      }
-      if (updates.translation?.api_key === "••••••••") {
-        merged.translation.api_key = current.translation.api_key;
-      }
-      // Preserve admin secrets
-      if (merged.admin) {
-        if (updates.admin?.password === "••••••••") {
-          merged.admin.password = current.admin?.password;
-        }
-        merged.admin.session_secret = current.admin?.session_secret;
-      }
+      const merged = mergeConfigUpdate(current, updates);
 
       saveConfig(merged);
       setConfig(merged);
 
       res.json({ status: "ok", message: "Configuration saved" });
     } catch (err) {
+      if (err instanceof ConfigValidationError) {
+        res.status(400).json({
+          error: "Invalid configuration",
+          issues: err.issues,
+        });
+        return;
+      }
+
       console.error("[admin] Failed to save config:", err);
       res.status(500).json({ error: "Failed to save configuration" });
     }
@@ -272,6 +257,42 @@ export function createAdminRouter(
   });
 
   return router;
+}
+
+export function mergeConfigUpdate(
+  current: AppConfig,
+  updates: unknown
+): AppConfig {
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+    throw new ConfigValidationError(["Config update must be an object"]);
+  }
+
+  const typedUpdates = updates as Partial<AppConfig>;
+  const merged = deepMerge(
+    JSON.parse(JSON.stringify(current)),
+    typedUpdates as Record<string, any>
+  ) as AppConfig;
+
+  // Don't overwrite masked fields
+  if (typedUpdates.instapaper?.password === "••••••••") {
+    merged.instapaper.password = current.instapaper.password;
+  }
+  if (typedUpdates.instapaper?.consumer_secret === "••••••••") {
+    merged.instapaper.consumer_secret = current.instapaper.consumer_secret;
+  }
+  if (typedUpdates.translation?.api_key === "••••••••") {
+    merged.translation.api_key = current.translation.api_key;
+  }
+  // Preserve admin secrets
+  if (merged.admin) {
+    if (typedUpdates.admin?.password === "••••••••") {
+      merged.admin.password = current.admin?.password;
+    }
+    merged.admin.session_secret = current.admin?.session_secret;
+  }
+
+  validateConfig(merged);
+  return merged;
 }
 
 function compactHeader(value?: string): string {
