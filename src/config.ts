@@ -1,11 +1,19 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import yaml from "js-yaml";
+import cron from "node-cron";
 import type { AppConfig } from "./types.js";
 import {
     DEFAULT_TEXT_PROMPT_TEMPLATE,
     DEFAULT_TITLE_PROMPT_TEMPLATE,
 } from "./translation-prompts.js";
+
+export class ConfigValidationError extends Error {
+    constructor(public readonly issues: string[]) {
+        super(`Invalid config: ${issues.join("; ")}`);
+        this.name = "ConfigValidationError";
+    }
+}
 
 const REQUIRED_FIELDS = [
     "instapaper.consumer_key",
@@ -27,6 +35,10 @@ function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
         }
         return undefined;
     }, obj);
+}
+
+function isMissing(value: unknown): boolean {
+    return value === undefined || value === null || value === "";
 }
 
 function applyEnvOverrides(config: Record<string, unknown>): void {
@@ -132,19 +144,286 @@ function applyDefaults(config: Record<string, unknown>): void {
     }
 }
 
-function validate(config: Record<string, unknown>): void {
-    const missing: string[] = [];
-    for (const field of REQUIRED_FIELDS) {
-        const value = getNestedValue(config, field);
-        if (value === undefined || value === null || value === "") {
-            missing.push(field);
+function isHttpUrl(value: string): boolean {
+    try {
+        const url = new URL(value);
+        return url.protocol === "http:" || url.protocol === "https:";
+    } catch {
+        return false;
+    }
+}
+
+function requireString(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[],
+    missing: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (isMissing(value)) {
+        missing.push(path);
+        return;
+    }
+    if (typeof value !== "string") {
+        issues.push(`${path} must be a string`);
+    }
+}
+
+function optionalString(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[],
+    options: { allowEmpty?: boolean; minLength?: number } = {}
+): void {
+    const value = getNestedValue(config, path);
+    if (value === undefined) return;
+    if (typeof value !== "string") {
+        issues.push(`${path} must be a string`);
+        return;
+    }
+    if (value.length === 0 && options.allowEmpty === false) {
+        issues.push(`${path} must not be empty`);
+        return;
+    }
+    if (options.minLength !== undefined && value.length > 0 && value.length < options.minLength) {
+        issues.push(`${path} must be at least ${options.minLength} characters`);
+    }
+}
+
+function requireBoolean(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (typeof value !== "boolean") {
+        issues.push(`${path} must be a boolean`);
+    }
+}
+
+function requireStringArray(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (!Array.isArray(value)) {
+        issues.push(`${path} must be an array of strings`);
+        return;
+    }
+    if (value.some((item) => typeof item !== "string")) {
+        issues.push(`${path} must be an array of strings`);
+    }
+}
+
+function optionalStringArray(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (value === undefined) return;
+    if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+        issues.push(`${path} must be an array of strings`);
+    }
+}
+
+function rejectUnknownKeys(
+    config: Record<string, unknown>,
+    path: string,
+    allowedKeys: readonly string[],
+    issues: string[]
+): void {
+    const value = path ? getNestedValue(config, path) : config;
+    if (value === undefined || !isRecord(value)) return;
+
+    const allowed = new Set(allowedKeys);
+    for (const key of Object.keys(value)) {
+        if (!allowed.has(key)) {
+            issues.push(`${path ? `${path}.` : ""}${key} is not a supported config key`);
         }
     }
+}
+
+function requirePort(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (
+        typeof value !== "number" ||
+        !Number.isInteger(value) ||
+        value < 1 ||
+        value > 65535
+    ) {
+        issues.push(`${path} must be an integer between 1 and 65535`);
+    }
+}
+
+function requireHttpUrl(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (typeof value !== "string" || !isHttpUrl(value)) {
+        issues.push(`${path} must be an http(s) URL`);
+    }
+}
+
+function optionalHttpUrl(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (value === undefined || value === "") return;
+    if (typeof value !== "string" || !isHttpUrl(value)) {
+        issues.push(`${path} must be an http(s) URL`);
+    }
+}
+
+function requireCronExpression(
+    config: Record<string, unknown>,
+    path: string,
+    issues: string[]
+): void {
+    const value = getNestedValue(config, path);
+    if (typeof value !== "string" || !cron.validate(value)) {
+        issues.push(`${path} must be a valid cron expression`);
+    }
+}
+
+export function validateConfig(config: unknown): asserts config is AppConfig {
+    if (!isRecord(config)) {
+        throw new ConfigValidationError([
+            "Config must contain a YAML object at the top level",
+        ]);
+    }
+
+    const missing: string[] = [];
+    const issues: string[] = [];
+
+    rejectUnknownKeys(config, "", [
+        "instapaper",
+        "filters",
+        "translation",
+        "tts",
+        "spotify_upload",
+        "schedule",
+        "server",
+        "feed",
+        "admin",
+        "data_dir",
+    ], issues);
+    rejectUnknownKeys(config, "instapaper", [
+        "consumer_key",
+        "consumer_secret",
+        "username",
+        "password",
+    ], issues);
+    rejectUnknownKeys(config, "filters", ["tags"], issues);
+    rejectUnknownKeys(config, "translation", [
+        "api_base",
+        "api_key",
+        "model",
+        "target_language",
+        "skip_if_same",
+        "title_prompt",
+        "text_prompt",
+    ], issues);
+    rejectUnknownKeys(config, "tts", ["voice", "rate", "pitch"], issues);
+    rejectUnknownKeys(config, "spotify_upload", [
+        "enabled",
+        "cli_path",
+        "show_id",
+        "new_show",
+        "language",
+        "summary",
+        "image_path",
+        "wait_for_ready",
+    ], issues);
+    rejectUnknownKeys(config, "schedule", ["cron"], issues);
+    rejectUnknownKeys(config, "server", ["port", "base_url"], issues);
+    rejectUnknownKeys(config, "feed", [
+        "title",
+        "description",
+        "language",
+        "author",
+        "image",
+    ], issues);
+    rejectUnknownKeys(config, "admin", [
+        "password",
+        "allowed_cidrs",
+        "session_secret",
+    ], issues);
+
+    for (const field of REQUIRED_FIELDS) {
+        requireString(config, field, issues, missing);
+    }
+
+    requireStringArray(config, "filters.tags", issues);
+
+    requireHttpUrl(config, "translation.api_base", issues);
+    requireBoolean(config, "translation.skip_if_same", issues);
+    requireString(config, "translation.model", issues, missing);
+    requireString(config, "translation.target_language", issues, missing);
+    optionalString(config, "translation.title_prompt", issues);
+    optionalString(config, "translation.text_prompt", issues);
+
+    requireString(config, "tts.voice", issues, missing);
+    requireString(config, "tts.rate", issues, missing);
+    requireString(config, "tts.pitch", issues, missing);
+
+    const spotifyUpload = getNestedValue(config, "spotify_upload");
+    if (spotifyUpload !== undefined) {
+        if (!isRecord(spotifyUpload)) {
+            issues.push("spotify_upload must be an object");
+        } else {
+            requireBoolean(config, "spotify_upload.enabled", issues);
+            requireString(config, "spotify_upload.cli_path", issues, missing);
+            requireString(config, "spotify_upload.language", issues, missing);
+            requireBoolean(config, "spotify_upload.wait_for_ready", issues);
+            optionalString(config, "spotify_upload.show_id", issues);
+            optionalString(config, "spotify_upload.new_show", issues);
+            optionalString(config, "spotify_upload.summary", issues);
+            optionalString(config, "spotify_upload.image_path", issues);
+        }
+    }
+
+    requireCronExpression(config, "schedule.cron", issues);
+    requirePort(config, "server.port", issues);
+    requireHttpUrl(config, "server.base_url", issues);
+
+    requireString(config, "feed.title", issues, missing);
+    requireString(config, "feed.description", issues, missing);
+    requireString(config, "feed.language", issues, missing);
+    requireString(config, "feed.author", issues, missing);
+    optionalHttpUrl(config, "feed.image", issues);
+
+    const admin = getNestedValue(config, "admin");
+    if (admin !== undefined) {
+        if (!isRecord(admin)) {
+            issues.push("admin must be an object");
+        } else {
+            optionalString(config, "admin.password", issues, { allowEmpty: false, minLength: 4 });
+            optionalString(config, "admin.session_secret", issues, { allowEmpty: false, minLength: 16 });
+            optionalStringArray(config, "admin.allowed_cidrs", issues);
+        }
+    }
+
+    requireString(config, "data_dir", issues, missing);
+
     if (missing.length > 0) {
-        throw new Error(
+        issues.unshift(
             `Missing required config fields: ${missing.join(", ")}. ` +
             `Set them in config.yaml or via environment variables.`
         );
+    }
+
+    if (issues.length > 0) {
+        throw new ConfigValidationError(issues);
     }
 }
 
@@ -176,15 +455,17 @@ export function loadConfig(configPath?: string): AppConfig {
 
     applyDefaults(raw);
     applyEnvOverrides(raw);
-    validate(raw);
+    validateConfig(raw);
 
-    return raw as unknown as AppConfig;
+    return raw;
 }
 
 /**
  * Save config back to the YAML file on disk.
  */
 export function saveConfig(config: AppConfig, configPath?: string): void {
+    validateConfig(config);
+
     const filePath = configPath ?? process.env.CONFIG_PATH ?? "config.yaml";
     const resolved = resolve(filePath);
     const yamlStr = yaml.dump(config as unknown as Record<string, unknown>, {

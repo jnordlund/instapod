@@ -83,4 +83,33 @@ instapaper:
 
         expect(() => loadConfig(path)).toThrow("must contain a YAML object");
     });
+
+    it("throws when typed config fields have invalid values", () => {
+        const path = writeConfig(`
+instapaper:
+  consumer_key: "ck"
+  consumer_secret: "cs"
+  username: "user"
+  password: "pass"
+unexpected: true
+filters:
+  tags: "pod"
+translation:
+  api_base: "not-a-url"
+  api_key: "sk-test"
+  extra: "nope"
+server:
+  port: 70000
+  base_url: "https://pod.example.com"
+schedule:
+  cron: "not a cron"
+`);
+
+        expect(() => loadConfig(path)).toThrow("unexpected is not a supported config key");
+        expect(() => loadConfig(path)).toThrow("translation.extra is not a supported config key");
+        expect(() => loadConfig(path)).toThrow("filters.tags must be an array of strings");
+        expect(() => loadConfig(path)).toThrow("translation.api_base must be an http(s) URL");
+        expect(() => loadConfig(path)).toThrow("server.port must be an integer between 1 and 65535");
+        expect(() => loadConfig(path)).toThrow("schedule.cron must be a valid cron expression");
+    });
 });
