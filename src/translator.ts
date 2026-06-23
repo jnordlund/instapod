@@ -79,6 +79,43 @@ export async function translateTitle(
     return callChatCompletions(title, config, true);
 }
 
+export async function testTranslationConfig(
+    config: TranslationConfig
+): Promise<string> {
+    const url = `${config.api_base.replace(/\/$/, "")}/chat/completions`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${config.api_key}`,
+        },
+        body: JSON.stringify({
+            model: config.model,
+            messages: [
+                {
+                    role: "user",
+                    content: "Reply with exactly: Instapod OK",
+                },
+            ],
+            temperature: 0,
+        }),
+        signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Translation API error (${response.status})`);
+    }
+
+    const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = data.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+        throw new Error("Translation API returned no message content");
+    }
+    return content;
+}
+
 async function callChatCompletions(
     text: string,
     config: TranslationConfig,

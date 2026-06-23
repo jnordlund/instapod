@@ -3,8 +3,16 @@ import { unlinkSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
-import { ConfigValidationError, saveConfig, validateConfig } from "./config.js";
+import {
+  ConfigValidationError,
+  type ConfigValidationMode,
+  saveConfig,
+  validateConfig,
+} from "./config.js";
 import { addLog, getLogs } from "./logs.js";
+import { InstapaperClient } from "./instapaper.js";
+import { getOnboardingStatus } from "./onboarding.js";
+import { testTranslationConfig } from "./translator.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -32,7 +40,8 @@ export function createAdminRouter(
   getConfig: () => AppConfig,
   setConfig: (c: AppConfig) => void,
   state: StateManager,
-  triggerRun: () => Promise<void>
+  triggerRun: () => Promise<void>,
+  onConfigChanged?: (config: AppConfig) => void
 ): Router {
   const router = Router();
 
@@ -59,7 +68,13 @@ export function createAdminRouter(
 
   // ── Auth routes ──
   router.post("/api/admin/login", (req, res) => handleLogin(req, res, getConfig));
-  router.post("/api/admin/setup", (req, res) => handleSetup(req, res, getConfig, setConfig, saveConfig));
+  router.post("/api/admin/setup", (req, res) => handleSetup(
+    req,
+    res,
+    getConfig,
+    setConfig,
+    (config) => saveConfig(config, undefined, { mode: "draft" })
+  ));
   router.post("/api/admin/logout", (req, res) => handleLogout(req, res));
 
   // ── Admin page ──
@@ -72,11 +87,11 @@ export function createAdminRouter(
   router.get("/api/config", (_req, res) => {
     const config = getConfig();
     const masked = JSON.parse(JSON.stringify(config));
-    masked.instapaper.password = "••••••••";
-    masked.instapaper.consumer_secret = "••••••••";
-    masked.translation.api_key = "••••••••";
+    masked.instapaper.password = maskConfiguredSecret(masked.instapaper.password);
+    masked.instapaper.consumer_secret = maskConfiguredSecret(masked.instapaper.consumer_secret);
+    masked.translation.api_key = maskConfiguredSecret(masked.translation.api_key);
     if (masked.admin) {
-      masked.admin.password = "••••••••";
+      masked.admin.password = maskConfiguredSecret(masked.admin.password);
       delete masked.admin.session_secret;
     }
     res.json(masked);
@@ -89,8 +104,9 @@ export function createAdminRouter(
       const current = getConfig();
       const merged = mergeConfigUpdate(current, updates);
 
-      saveConfig(merged);
+      saveConfig(merged, undefined, { mode: "draft" });
       setConfig(merged);
+      onConfigChanged?.(merged);
 
       res.json({ status: "ok", message: "Configuration saved" });
     } catch (err) {
@@ -104,6 +120,76 @@ export function createAdminRouter(
 
       console.error("[admin] Failed to save config:", err);
       res.status(500).json({ error: "Failed to save configuration" });
+    }
+  });
+
+  // ── API: Onboarding status and checks ──
+  router.get("/api/onboarding/status", (_req, res) => {
+    const episodes = state.getProcessedBookmarks();
+    res.json(getOnboardingStatus(getConfig(), {
+      episodeCount: episodes.length,
+      lastRun: state.getLastRun(),
+    }));
+  });
+
+  router.post("/api/onboarding/test/instapaper", async (req, res) => {
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), req.body || {});
+      validateConfig(candidate, { mode: "draft" });
+
+      const missing = [
+        ["instapaper.consumer_key", candidate.instapaper.consumer_key],
+        ["instapaper.consumer_secret", candidate.instapaper.consumer_secret],
+        ["instapaper.username", candidate.instapaper.username],
+        ["instapaper.password", candidate.instapaper.password],
+      ].filter(([, value]) => typeof value !== "string" || value.trim() === "");
+
+      if (missing.length > 0) {
+        res.status(400).json({
+          ok: false,
+          error: `Missing ${missing.map(([path]) => path).join(", ")}`,
+        });
+        return;
+      }
+
+      const client = new InstapaperClient(candidate.instapaper);
+      await client.authenticate();
+      res.json({ ok: true, message: "Instapaper authentication succeeded" });
+    } catch (err) {
+      const message = err instanceof ConfigValidationError
+        ? err.issues.join("; ")
+        : (err as Error).message || "Instapaper test failed";
+      res.status(400).json({ ok: false, error: message });
+    }
+  });
+
+  router.post("/api/onboarding/test/translation", async (req, res) => {
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), req.body || {});
+      validateConfig(candidate, { mode: "draft" });
+
+      const missing = [
+        ["translation.api_base", candidate.translation.api_base],
+        ["translation.api_key", candidate.translation.api_key],
+        ["translation.model", candidate.translation.model],
+        ["translation.target_language", candidate.translation.target_language],
+      ].filter(([, value]) => typeof value !== "string" || value.trim() === "");
+
+      if (missing.length > 0) {
+        res.status(400).json({
+          ok: false,
+          error: `Missing ${missing.map(([path]) => path).join(", ")}`,
+        });
+        return;
+      }
+
+      const preview = await testTranslationConfig(candidate.translation);
+      res.json({ ok: true, message: "Translation API responded", preview });
+    } catch (err) {
+      const message = err instanceof ConfigValidationError
+        ? err.issues.join("; ")
+        : (err as Error).message || "Translation test failed";
+      res.status(400).json({ ok: false, error: message });
     }
   });
 
@@ -199,8 +285,9 @@ export function createAdminRouter(
             ...merged.spotify_upload,
             cli_path: result.cliPath,
           };
-        saveConfig(merged);
+          saveConfig(merged, undefined, { mode: "draft" });
         setConfig(merged);
+        onConfigChanged?.(merged);
       }
 
       res.status(result.ok ? 200 : 500).json(result);
@@ -250,6 +337,21 @@ export function createAdminRouter(
 
   // ── API: Trigger pipeline ──
   router.post("/api/trigger", (_req, res) => {
+    const episodes = state.getProcessedBookmarks();
+    const onboarding = getOnboardingStatus(getConfig(), {
+      episodeCount: episodes.length,
+      lastRun: state.getLastRun(),
+    });
+
+    if (!onboarding.runnable) {
+      res.status(409).json({
+        status: "blocked",
+        message: "Complete setup before running the pipeline",
+        onboarding,
+      });
+      return;
+    }
+
     res.json({ status: "started", message: "Pipeline run triggered" });
     triggerRun().catch((err) =>
       console.error("[admin] Triggered run failed:", err)
@@ -261,7 +363,8 @@ export function createAdminRouter(
 
 export function mergeConfigUpdate(
   current: AppConfig,
-  updates: unknown
+  updates: unknown,
+  mode: ConfigValidationMode = "draft"
 ): AppConfig {
   if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
     throw new ConfigValidationError(["Config update must be an object"]);
@@ -291,13 +394,17 @@ export function mergeConfigUpdate(
     merged.admin.session_secret = current.admin?.session_secret;
   }
 
-  validateConfig(merged);
+  validateConfig(merged, { mode });
   return merged;
 }
 
 function compactHeader(value?: string): string {
   if (!value) return "-";
   return value.replace(/\s+/g, " ").trim();
+}
+
+function maskConfiguredSecret(value: unknown): string {
+  return typeof value === "string" && value.trim().length > 0 ? "••••••••" : "";
 }
 
 function deepMerge(target: Record<string, any>, source: Record<string, any>): Record<string, any> {
@@ -385,6 +492,7 @@ header h1 {
 }
 .badge.ok { background: rgba(34,197,94,0.15); color: var(--success); }
 .badge.running { background: rgba(108,99,255,0.15); color: var(--accent2); }
+.badge.warning { background: rgba(245,158,11,0.16); color: var(--warning); }
 
 .card {
   background: var(--surface);
@@ -402,6 +510,97 @@ header h1 {
   gap: 8px;
 }
 .card h2 .icon { font-size: 1.2rem; }
+
+.setup-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.8fr);
+  gap: 18px;
+  align-items: stretch;
+  margin-bottom: 20px;
+}
+@media (max-width: 760px) { .setup-hero { grid-template-columns: 1fr; } }
+.setup-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+}
+.setup-panel h2 {
+  font-size: 1.2rem;
+  margin-bottom: 8px;
+}
+.setup-panel p {
+  color: var(--text2);
+  font-size: 0.9rem;
+}
+.setup-progress {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+.setup-progress .big {
+  font-size: 2.2rem;
+  font-weight: 700;
+}
+.setup-progress .caption {
+  color: var(--text2);
+  font-size: 0.85rem;
+}
+.setup-steps {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+.setup-step {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.setup-step .mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: var(--surface2);
+  color: var(--text2);
+}
+.setup-step.complete .mark { background: rgba(34,197,94,0.15); color: var(--success); }
+.setup-step.missing .mark { background: rgba(245,158,11,0.16); color: var(--warning); }
+.setup-step.blocked .mark { background: rgba(239,68,68,0.14); color: var(--danger); }
+.setup-step.optional .mark { background: rgba(139,144,165,0.14); color: var(--text2); }
+.setup-step .title {
+  font-weight: 600;
+}
+.setup-step .detail {
+  color: var(--text2);
+  font-size: 0.8rem;
+  margin-top: 2px;
+}
+.setup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.setup-blockers {
+  margin-top: 12px;
+  color: var(--warning);
+  font-size: 0.82rem;
+}
+.setup-blockers ul {
+  margin-left: 18px;
+}
 
 /* Status bar */
 .status-bar {
@@ -435,6 +634,12 @@ header h1 {
 }
 .btn:hover { transform: translateY(-1px); }
 .btn:active { transform: translateY(0); }
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 .btn-primary {
   background: linear-gradient(135deg, var(--accent), var(--accent2));
   color: #fff;
@@ -698,13 +903,123 @@ header h1 {
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" onclick="switchTab('episodes')">Episodes</div>
+    <div class="tab active" onclick="switchTab('setup')">Setup</div>
+    <div class="tab" onclick="switchTab('episodes')">Episodes</div>
     <div class="tab" onclick="switchTab('config')">Configuration</div>
     <div class="tab" onclick="switchTab('logs')">Logs</div>
   </div>
 
+  <!-- Setup tab -->
+  <div class="tab-content active" id="tab-setup">
+    <div class="setup-hero">
+      <div class="setup-panel">
+        <h2>Finish first-run setup</h2>
+        <p id="setupSummary">Checking setup status...</p>
+        <div class="setup-actions">
+          <button class="btn btn-primary" onclick="saveSetupForm()" id="setupSaveBtn">Save setup</button>
+          <button class="btn btn-ghost" onclick="switchTab('config')">Advanced configuration</button>
+        </div>
+        <div class="setup-blockers" id="setupBlockers"></div>
+      </div>
+      <div class="setup-panel setup-progress">
+        <div class="big" id="setupProgressValue">—</div>
+        <div class="caption" id="setupProgressCaption">Required steps complete</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="icon">1</span> Connect Instapaper</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="setup-instapaper-username" autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="setup-instapaper-password" autocomplete="current-password">
+        </div>
+        <div class="form-group">
+          <label>Consumer Key</label>
+          <input type="text" id="setup-instapaper-consumer_key">
+        </div>
+        <div class="form-group">
+          <label>Consumer Secret</label>
+          <input type="password" id="setup-instapaper-consumer_secret">
+        </div>
+        <div class="form-group full" style="align-items:flex-start;">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="testInstapaper()" id="setupInstapaperTestBtn">Test Instapaper</button>
+          <div class="form-help" id="setupInstapaperTestResult">Add credentials, then test the connection.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="icon">2</span> Configure translation</h2>
+      <div class="form-grid">
+        <div class="form-group">
+          <label>API Base URL</label>
+          <input type="url" id="setup-translation-api_base">
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="setup-translation-api_key">
+        </div>
+        <div class="form-group">
+          <label>Model</label>
+          <input type="text" id="setup-translation-model">
+        </div>
+        <div class="form-group">
+          <label>Target Language</label>
+          <input type="text" id="setup-translation-target_language">
+        </div>
+        <div class="form-group full" style="align-items:flex-start;">
+          <button type="button" class="btn btn-ghost btn-sm" onclick="testTranslation()" id="setupTranslationTestBtn">Test Translation</button>
+          <div class="form-help" id="setupTranslationTestResult">Use any OpenAI-compatible chat completions API.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="icon">3</span> Publish the feed</h2>
+      <div class="form-grid">
+        <div class="form-group full">
+          <label>Base URL</label>
+          <input type="url" id="setup-server-base_url" placeholder="https://pod.example.com">
+          <div class="form-help">This is used to generate the public RSS and audio URLs.</div>
+        </div>
+        <div class="form-group">
+          <label>Feed Title</label>
+          <input type="text" id="setup-feed-title">
+        </div>
+        <div class="form-group">
+          <label>Feed Author</label>
+          <input type="text" id="setup-feed-author">
+        </div>
+        <div class="form-group full">
+          <label>Feed Description</label>
+          <input type="text" id="setup-feed-description">
+        </div>
+        <div class="form-group">
+          <label>Language</label>
+          <input type="text" id="setup-feed-language" placeholder="sv">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2><span class="icon">4</span> Run the first import</h2>
+      <div id="setupSteps" class="setup-steps">
+        <div class="empty-state">Checking setup...</div>
+      </div>
+      <div class="setup-actions">
+        <div class="form-help" id="setupRunHint">Complete the required setup before running the pipeline.</div>
+        <button class="btn btn-primary" onclick="triggerPipeline()" id="setupRunBtn">Run Now</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Episodes tab -->
-  <div class="tab-content active" id="tab-episodes">
+  <div class="tab-content" id="tab-episodes">
     <div class="card">
       <h2><span class="icon">🎧</span> Episodes</h2>
       <ul class="episode-list" id="episodeList">
@@ -983,6 +1298,8 @@ header h1 {
 <script>
 // ── State ──
 let currentConfig = null;
+let onboardingStatus = null;
+let initialTabApplied = false;
 let logEntries = [];
 let latestLogId = 0;
 
@@ -1044,6 +1361,84 @@ async function apiFetch(url, opts = {}) {
   const r = await fetch(url, { credentials: 'include', ...opts });
   if (r.status === 401) { window.location.href = '/admin'; throw new Error('auth'); }
   return r;
+}
+
+function stepMark(status) {
+  if (status === 'complete') return '✓';
+  if (status === 'blocked') return '!';
+  if (status === 'optional') return '·';
+  return '•';
+}
+
+function renderOnboardingStatus(status) {
+  onboardingStatus = status;
+
+  const required = (status.steps || []).filter(step => step.required);
+  const completeRequired = required.filter(step => step.status === 'complete').length;
+  const progressValue = document.getElementById('setupProgressValue');
+  const summary = document.getElementById('setupSummary');
+  const blockers = document.getElementById('setupBlockers');
+  const stepsEl = document.getElementById('setupSteps');
+  const runHint = document.getElementById('setupRunHint');
+  const statusBadge = document.getElementById('statusBadge');
+
+  if (progressValue) progressValue.textContent = completeRequired + '/' + required.length;
+  if (summary) {
+    summary.textContent = status.runnable
+      ? 'Core setup is complete. You can run the pipeline and subscribe to the feed.'
+      : 'Complete the required steps below before Instapod starts scheduled imports.';
+  }
+  if (statusBadge) {
+    statusBadge.textContent = status.runnable ? '● Ready' : '● Setup needed';
+    statusBadge.className = 'badge ' + (status.runnable ? 'ok' : 'warning');
+  }
+  if (blockers) {
+    blockers.innerHTML = status.blockingIssues && status.blockingIssues.length > 0
+      ? '<div>Blocking setup issues:</div><ul>' + status.blockingIssues.slice(0, 5).map(issue => '<li>' + escapeHtml(issue) + '</li>').join('') + '</ul>'
+      : '';
+  }
+  if (stepsEl) {
+    stepsEl.innerHTML = (status.steps || []).map(step => \`
+      <div class="setup-step \${escapeHtml(step.status)}">
+        <div class="mark">\${stepMark(step.status)}</div>
+        <div>
+          <div class="title">\${escapeHtml(step.label)}</div>
+          <div class="detail">\${escapeHtml(step.detail)}</div>
+        </div>
+      </div>
+    \`).join('');
+  }
+  if (runHint) {
+    runHint.textContent = status.runnable
+      ? (status.firstRunComplete ? 'Pipeline has run before. You can run it again manually.' : 'Setup is complete. Run once to create the first episode.')
+      : 'Complete the required setup before running the pipeline.';
+  }
+  updateRunControls();
+
+  if (!initialTabApplied) {
+    switchTab(status.runnable ? 'episodes' : 'setup');
+    initialTabApplied = true;
+  }
+}
+
+function updateRunControls() {
+  const canRun = Boolean(onboardingStatus?.runnable);
+  for (const id of ['triggerBtn', 'setupRunBtn']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.disabled = !canRun;
+    btn.title = canRun ? '' : 'Complete setup before running the pipeline';
+  }
+}
+
+async function loadOnboardingStatus() {
+  try {
+    const r = await apiFetch('/api/onboarding/status');
+    const status = await r.json();
+    renderOnboardingStatus(status);
+  } catch (e) {
+    if (e.message !== 'auth') console.error('Failed to load onboarding status:', e);
+  }
 }
 
 async function loadStatus() {
@@ -1177,20 +1572,41 @@ async function deleteEpisode(id, btn) {
 }
 
 async function triggerPipeline() {
+  if (onboardingStatus && !onboardingStatus.runnable) {
+    showToast('Complete setup before running the pipeline', 'error');
+    switchTab('setup');
+    updateRunControls();
+    return;
+  }
   const btn = document.getElementById('triggerBtn');
-  btn.innerHTML = '<span class="spinner"></span> Running...';
-  btn.disabled = true;
+  const setupBtn = document.getElementById('setupRunBtn');
+  const buttons = [btn, setupBtn].filter(Boolean);
+  buttons.forEach((button) => {
+    button.innerHTML = '<span class="spinner"></span> Running...';
+    button.disabled = true;
+  });
   try {
-    await apiFetch('/api/trigger', { method: 'POST' });
-    showToast('Pipeline triggered');
+    const r = await apiFetch('/api/trigger', { method: 'POST' });
+    if (r.ok) {
+      showToast('Pipeline triggered');
+    } else if (r.status === 409) {
+      const data = await r.json();
+      if (data.onboarding) renderOnboardingStatus(data.onboarding);
+      showToast(data.message || 'Complete setup before running', 'error');
+      switchTab('setup');
+    } else {
+      showToast('Failed to trigger', 'error');
+    }
   } catch (e) {
     showToast('Failed to trigger', 'error');
   }
   setTimeout(() => {
-    btn.innerHTML = '▶ Run Now';
-    btn.disabled = false;
+    buttons.forEach((button) => {
+      button.innerHTML = '▶ Run Now';
+    });
     loadStatus();
     loadEpisodes();
+    loadOnboardingStatus();
   }, 5000);
 }
 
@@ -1364,8 +1780,10 @@ async function loadConfig() {
     const r = await apiFetch('/api/config');
     currentConfig = await r.json();
     populateForm(currentConfig);
+    return currentConfig;
   } catch (e) {
     showToast('Failed to load config', 'error');
+    return null;
   }
 }
 
@@ -1486,6 +1904,20 @@ function syncScheduleUiFromCron(cronExpr) {
 }
 
 function populateForm(c) {
+  setValue('setup-instapaper-username', c.instapaper?.username);
+  setValue('setup-instapaper-password', c.instapaper?.password);
+  setValue('setup-instapaper-consumer_key', c.instapaper?.consumer_key);
+  setValue('setup-instapaper-consumer_secret', c.instapaper?.consumer_secret);
+  setValue('setup-translation-api_base', c.translation?.api_base);
+  setValue('setup-translation-api_key', c.translation?.api_key);
+  setValue('setup-translation-model', c.translation?.model);
+  setValue('setup-translation-target_language', c.translation?.target_language);
+  setValue('setup-server-base_url', c.server?.base_url);
+  setValue('setup-feed-title', c.feed?.title);
+  setValue('setup-feed-author', c.feed?.author);
+  setValue('setup-feed-description', c.feed?.description);
+  setValue('setup-feed-language', c.feed?.language);
+
   setValue('cfg-instapaper-username', c.instapaper?.username);
   setValue('cfg-instapaper-password', c.instapaper?.password);
   setValue('cfg-instapaper-consumer_key', c.instapaper?.consumer_key);
@@ -1536,6 +1968,110 @@ function setChecked(id, val) {
 function getChecked(id) {
   const el = document.getElementById(id);
   return Boolean(el && el.checked);
+}
+
+function buildSetupConfigUpdate() {
+  return {
+    instapaper: {
+      username: getValue('setup-instapaper-username'),
+      password: getValue('setup-instapaper-password'),
+      consumer_key: getValue('setup-instapaper-consumer_key'),
+      consumer_secret: getValue('setup-instapaper-consumer_secret'),
+    },
+    translation: {
+      api_base: getValue('setup-translation-api_base'),
+      api_key: getValue('setup-translation-api_key'),
+      model: getValue('setup-translation-model'),
+      target_language: getValue('setup-translation-target_language'),
+      skip_if_same: currentConfig?.translation?.skip_if_same ?? true,
+      title_prompt: currentConfig?.translation?.title_prompt ?? DEFAULT_TITLE_PROMPT,
+      text_prompt: currentConfig?.translation?.text_prompt ?? DEFAULT_TEXT_PROMPT,
+    },
+    server: {
+      port: currentConfig?.server?.port ?? 8080,
+      base_url: getValue('setup-server-base_url'),
+    },
+    feed: {
+      title: getValue('setup-feed-title'),
+      description: getValue('setup-feed-description'),
+      language: getValue('setup-feed-language'),
+      author: getValue('setup-feed-author'),
+      image: currentConfig?.feed?.image || undefined,
+    },
+  };
+}
+
+async function saveSetupForm() {
+  const btn = document.getElementById('setupSaveBtn');
+  btn.innerHTML = '<span class="spinner"></span> Saving...';
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/config', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSetupConfigUpdate()),
+    });
+    if (r.ok) {
+      showToast('Setup saved');
+      await loadConfig();
+      await loadOnboardingStatus();
+    } else {
+      const data = await r.json().catch(() => ({}));
+      showToast(data.error || 'Failed to save setup', 'error');
+    }
+  } catch (e) {
+    showToast('Network error', 'error');
+  } finally {
+    btn.innerHTML = 'Save setup';
+    btn.disabled = false;
+  }
+}
+
+async function runSetupTest(buttonId, resultId, url, successMessage) {
+  const btn = document.getElementById(buttonId);
+  const result = document.getElementById(resultId);
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Testing...';
+  if (result) result.textContent = 'Testing...';
+  try {
+    const r = await apiFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildSetupConfigUpdate()),
+    });
+    const data = await r.json();
+    if (r.ok && data.ok) {
+      if (result) result.textContent = successMessage + (data.preview ? ': ' + data.preview : '');
+      showToast(successMessage);
+    } else {
+      if (result) result.textContent = data.error || 'Test failed';
+      showToast('Test failed', 'error');
+    }
+  } catch (e) {
+    if (result) result.textContent = e.message || 'Network error';
+    showToast('Test failed', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = buttonId === 'setupInstapaperTestBtn' ? 'Test Instapaper' : 'Test Translation';
+  }
+}
+
+function testInstapaper() {
+  return runSetupTest(
+    'setupInstapaperTestBtn',
+    'setupInstapaperTestResult',
+    '/api/onboarding/test/instapaper',
+    'Instapaper authentication succeeded'
+  );
+}
+
+function testTranslation() {
+  return runSetupTest(
+    'setupTranslationTestBtn',
+    'setupTranslationTestResult',
+    '/api/onboarding/test/translation',
+    'Translation API responded'
+  );
 }
 
 async function saveConfigForm() {
@@ -1610,9 +2146,11 @@ async function saveConfigForm() {
     });
     if (r.ok) {
       showToast('Configuration saved');
-      loadConfig();
+      await loadConfig();
+      await loadOnboardingStatus();
     } else {
-      showToast('Failed to save', 'error');
+      const data = await r.json().catch(() => ({}));
+      showToast(data.error || 'Failed to save', 'error');
     }
   } catch (e) {
     showToast('Network error', 'error');
@@ -1632,9 +2170,10 @@ async function doLogout() {
 loadStatus();
 loadEpisodes();
 loadLogs(true);
-loadConfig();
+loadConfig().then(() => loadOnboardingStatus());
 loadSpotifyStatus();
 setInterval(loadStatus, 30000);
+setInterval(loadOnboardingStatus, 30000);
 setInterval(() => {
   const logsTab = document.getElementById('tab-logs');
   const autoRefresh = document.getElementById('logs-auto-refresh');

@@ -74,6 +74,35 @@ export interface AppConfig {
     data_dir: string;
 }
 
+export type OnboardingStepId =
+    | "admin"
+    | "instapaper"
+    | "translation"
+    | "feed"
+    | "first_run"
+    | "spotify_optional";
+
+export type OnboardingStepStatus = "complete" | "missing" | "blocked" | "optional";
+
+export interface OnboardingStep {
+    id: OnboardingStepId;
+    label: string;
+    status: OnboardingStepStatus;
+    required: boolean;
+    detail: string;
+    action?: string;
+}
+
+export interface OnboardingStatus {
+    runnable: boolean;
+    blockingIssues: string[];
+    steps: OnboardingStep[];
+    feedUrl: string | null;
+    firstRunComplete: boolean;
+    episodeCount: number;
+    lastRun: string | null;
+}
+
 // ── Article types ──
 
 export interface ParsedArticle {

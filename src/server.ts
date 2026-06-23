@@ -9,7 +9,8 @@ import { createAdminRouter } from "./admin.js";
 export function createServer(
     config: AppConfig,
     state: StateManager,
-    triggerRun: () => Promise<void>
+    triggerRun: () => Promise<void>,
+    onConfigChanged?: (config: AppConfig) => void
 ) {
     const app = express();
     app.set("trust proxy", true);  // Needed for correct req.ip behind Docker/nginx
@@ -28,7 +29,7 @@ export function createServer(
     const setConfig = (c: AppConfig) => { currentConfig = c; };
 
     // ── Admin routes ──
-    app.use(createAdminRouter(getConfig, setConfig, state, triggerRun));
+    app.use(createAdminRouter(getConfig, setConfig, state, triggerRun, onConfigChanged));
 
     app.get("/", (_req, res) => {
         res.redirect("/admin");

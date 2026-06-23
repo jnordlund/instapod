@@ -15,13 +15,18 @@ export class ConfigValidationError extends Error {
     }
 }
 
-const REQUIRED_FIELDS = [
+export type ConfigValidationMode = "draft" | "runnable";
+
+export interface ConfigValidationOptions {
+    mode?: ConfigValidationMode;
+}
+
+const RUNNABLE_REQUIRED_STRING_FIELDS = [
     "instapaper.consumer_key",
     "instapaper.consumer_secret",
     "instapaper.username",
     "instapaper.password",
     "translation.api_key",
-    "server.base_url",
 ] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -97,8 +102,13 @@ function parseBoolean(value: string): boolean {
 }
 
 const DEFAULTS: Partial<Record<string, unknown>> = {
+    "instapaper.consumer_key": "",
+    "instapaper.consumer_secret": "",
+    "instapaper.username": "",
+    "instapaper.password": "",
     "filters.tags": [],
     "translation.api_base": "https://api.openai.com/v1",
+    "translation.api_key": "",
     "translation.model": "gpt-4o-mini",
     "translation.target_language": "svenska",
     "translation.skip_if_same": true,
@@ -113,6 +123,7 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "spotify_upload.wait_for_ready": false,
     "schedule.cron": "*/30 * * * *",
     "server.port": 8080,
+    "server.base_url": "",
     "feed.title": "Instapod",
     "feed.description": "Artiklar upplästa som podcast",
     "feed.language": "sv",
@@ -295,13 +306,17 @@ function requireCronExpression(
     }
 }
 
-export function validateConfig(config: unknown): asserts config is AppConfig {
+export function validateConfig(
+    config: unknown,
+    options: ConfigValidationOptions = {}
+): asserts config is AppConfig {
     if (!isRecord(config)) {
         throw new ConfigValidationError([
             "Config must contain a YAML object at the top level",
         ]);
     }
 
+    const mode = options.mode ?? "runnable";
     const missing: string[] = [];
     const issues: string[] = [];
 
@@ -359,8 +374,12 @@ export function validateConfig(config: unknown): asserts config is AppConfig {
         "session_secret",
     ], issues);
 
-    for (const field of REQUIRED_FIELDS) {
-        requireString(config, field, issues, missing);
+    for (const field of RUNNABLE_REQUIRED_STRING_FIELDS) {
+        if (mode === "runnable") {
+            requireString(config, field, issues, missing);
+        } else {
+            optionalString(config, field, issues);
+        }
     }
 
     requireStringArray(config, "filters.tags", issues);
@@ -394,7 +413,11 @@ export function validateConfig(config: unknown): asserts config is AppConfig {
 
     requireCronExpression(config, "schedule.cron", issues);
     requirePort(config, "server.port", issues);
-    requireHttpUrl(config, "server.base_url", issues);
+    if (mode === "runnable") {
+        requireHttpUrl(config, "server.base_url", issues);
+    } else {
+        optionalHttpUrl(config, "server.base_url", issues);
+    }
 
     requireString(config, "feed.title", issues, missing);
     requireString(config, "feed.description", issues, missing);
@@ -427,7 +450,10 @@ export function validateConfig(config: unknown): asserts config is AppConfig {
     }
 }
 
-export function loadConfig(configPath?: string): AppConfig {
+export function loadConfig(
+    configPath?: string,
+    options: ConfigValidationOptions = {}
+): AppConfig {
     const filePath = configPath ?? process.env.CONFIG_PATH ?? "config.yaml";
     const resolved = resolve(filePath);
 
@@ -455,7 +481,7 @@ export function loadConfig(configPath?: string): AppConfig {
 
     applyDefaults(raw);
     applyEnvOverrides(raw);
-    validateConfig(raw);
+    validateConfig(raw, options);
 
     return raw;
 }
@@ -463,8 +489,12 @@ export function loadConfig(configPath?: string): AppConfig {
 /**
  * Save config back to the YAML file on disk.
  */
-export function saveConfig(config: AppConfig, configPath?: string): void {
-    validateConfig(config);
+export function saveConfig(
+    config: AppConfig,
+    configPath?: string,
+    options: ConfigValidationOptions = {}
+): void {
+    validateConfig(config, options);
 
     const filePath = configPath ?? process.env.CONFIG_PATH ?? "config.yaml";
     const resolved = resolve(filePath);

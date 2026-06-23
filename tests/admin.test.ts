@@ -1,7 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mergeConfigUpdate } from "../src/admin.js";
 import { ConfigValidationError } from "../src/config.js";
+import { createServer } from "../src/server.js";
+import { StateManager } from "../src/state.js";
 import type { AppConfig } from "../src/types.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import type { Server } from "node:http";
+
+let tempDirs: string[] = [];
+let servers: Server[] = [];
+
+afterEach(async () => {
+    await Promise.all(servers.map((server) => new Promise<void>((resolve) => {
+        server.close(() => resolve());
+    })));
+    servers = [];
+    for (const dir of tempDirs) {
+        rmSync(dir, { recursive: true, force: true });
+    }
+    tempDirs = [];
+});
 
 function makeConfig(): AppConfig {
     return {
@@ -116,5 +136,64 @@ describe("mergeConfigUpdate", () => {
             port: 9090,
             base_url: "https://new.example.com",
         });
+    });
+});
+
+describe("admin trigger", () => {
+    it("blocks manual pipeline runs until config is runnable", async () => {
+        const dataDir = mkdtempSync(join(tmpdir(), "instapod-admin-test-"));
+        tempDirs.push(dataDir);
+        const config = makeConfig();
+        config.data_dir = dataDir;
+        config.instapaper.consumer_key = "";
+        config.instapaper.consumer_secret = "";
+        config.instapaper.password = "";
+        config.translation.api_key = "";
+        config.server.base_url = "";
+
+        let triggered = false;
+        const app = createServer(
+            config,
+            new StateManager(dataDir),
+            async () => {
+                triggered = true;
+            }
+        );
+        const server = app.listen(0);
+        servers.push(server);
+        await new Promise<void>((resolve) => server.once("listening", resolve));
+        const address = server.address();
+        if (!address || typeof address === "string") {
+            throw new Error("Expected TCP test server address");
+        }
+        const baseUrl = `http://127.0.0.1:${address.port}`;
+
+        const login = await fetch(`${baseUrl}/api/admin/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: "secret" }),
+        });
+        expect(login.status).toBe(200);
+        const cookie = login.headers.get("set-cookie")?.split(";")[0];
+        expect(cookie).toBeTruthy();
+
+        const maskedConfigResponse = await fetch(`${baseUrl}/api/config`, {
+            headers: { Cookie: cookie ?? "" },
+        });
+        const maskedConfig = await maskedConfigResponse.json();
+        expect(maskedConfig.instapaper.password).toBe("");
+        expect(maskedConfig.translation.api_key).toBe("");
+        expect(maskedConfig.admin.password).toBe("••••••••");
+
+        const trigger = await fetch(`${baseUrl}/api/trigger`, {
+            method: "POST",
+            headers: { Cookie: cookie ?? "" },
+        });
+        const body = await trigger.json();
+
+        expect(trigger.status).toBe(409);
+        expect(body.status).toBe("blocked");
+        expect(body.onboarding.runnable).toBe(false);
+        expect(triggered).toBe(false);
     });
 });

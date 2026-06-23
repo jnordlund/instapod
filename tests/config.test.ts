@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, validateConfig } from "../src/config.js";
 import { join } from "node:path";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,6 +72,20 @@ instapaper:
         const path = writeConfig("");
 
         expect(() => loadConfig(path)).toThrow("Missing required config fields");
+    });
+
+    it("loads missing first-run config in draft mode", () => {
+        const path = writeConfig("");
+
+        const config = loadConfig(path, { mode: "draft" });
+        expect(config.instapaper.consumer_key).toBe("");
+        expect(config.translation.api_key).toBe("");
+        expect(config.server.base_url).toBe("");
+        expect(config.feed.title).toBe("Instapod");
+
+        expect(() => validateConfig(config, { mode: "runnable" })).toThrow(
+            "Missing required config fields"
+        );
     });
 
     it("throws when the top-level YAML value is not an object", () => {
