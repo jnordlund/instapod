@@ -17,12 +17,15 @@ Instapaper → Fetch articles → Translate (LLM) → Text-to-Speech → RSS Fee
 
 ## Quick start
 
-### 1. Configure
+### 1. Create a config file
 
 ```bash
-cp config.example.yaml config.yaml
-# Edit config.yaml with your credentials
+touch config.yaml
 ```
+
+Instapod can start with an empty config file. The admin UI will guide you through the required setup.
+
+If you prefer editing YAML by hand, copy [`config.example.yaml`](config.example.yaml) to `config.yaml` and fill in all required values before starting.
 
 ### 2. Run with Docker (recommended)
 
@@ -30,7 +33,9 @@ cp config.example.yaml config.yaml
 docker compose up --build -d
 ```
 
-The feed is available at `http://localhost:8080/feed`.
+Open `http://localhost:8080/admin`, set an admin password, and complete the **Setup** tab.
+
+The feed is available at `http://localhost:8080/feed` once setup is complete and the pipeline has run.
 
 ### 3. Run locally
 
@@ -39,7 +44,20 @@ npm install
 npm run dev
 ```
 
-### 4. Optional: enable Spotify upload
+Open `http://localhost:8080/admin`, set an admin password, and complete the **Setup** tab.
+
+### 4. First-run setup
+
+The Setup tab asks for the minimum required configuration:
+
+1. **Instapaper** — username, password, consumer key, and consumer secret
+2. **Translation** — OpenAI-compatible API base, API key, model, and target language
+3. **Feed** — public base URL and podcast metadata
+4. **First run** — manually trigger the first import
+
+Scheduled imports and **Run Now** stay disabled until the core configuration is runnable. Optional settings like TTS tuning, schedule, access control, translation prompts, and Spotify upload remain available in **Configuration**.
+
+### 5. Optional: enable Spotify upload
 
 Open `http://localhost:8080/admin`, go to **Configuration → Spotify Upload**, then:
 
@@ -91,6 +109,11 @@ New episodes appear automatically as Instapod processes tagged articles.
 ## Configuration
 
 See [`config.example.yaml`](config.example.yaml) for all options:
+
+Instapod validates configuration in two modes:
+
+- **Draft** — used by the admin UI so first-run setup can be saved gradually
+- **Runnable** — required before scheduled imports, manual pipeline runs, and startup imports are allowed
 
 | Section | Key | Description |
 |---|---|---|
@@ -177,8 +200,11 @@ If `show_id` is empty, you can set `new_show` to create/use a named show. If bot
 |---|---|---|
 | `GET` | `/feed` | RSS podcast feed (XML) |
 | `GET` | `/audio/:filename` | Stream an episode MP3 |
-| `POST` | `/trigger` | Manually trigger a pipeline run |
+| `POST` | `/api/trigger` | Manually trigger a pipeline run when setup is complete |
 | `GET` | `/health` | Health check with episode count |
+| `GET` | `/api/onboarding/status` | Current setup readiness, blockers, and step status |
+| `POST` | `/api/onboarding/test/instapaper` | Test Instapaper credentials from the setup form |
+| `POST` | `/api/onboarding/test/translation` | Test translation API settings from the setup form |
 | `POST` | `/api/spotify/install` | Install `save-to-spotify` from the admin UI |
 | `POST` | `/api/spotify/auth/start` | Start headless Spotify auth |
 | `POST` | `/api/spotify/auth/complete` | Complete headless Spotify auth |
@@ -190,16 +216,17 @@ index.ts          → Express server + scheduler
 scheduler.ts      → Spawns pipeline as child process (cron)
 pipeline-runner.ts → Standalone pipeline script
 worker.ts         → Fetch → parse → translate → TTS → optional Spotify upload → save state
+onboarding.ts     → Setup readiness and runnable-config checks
 spotify.ts        → save-to-spotify install/auth/upload wrapper
 tts.ts            → Spawns TTS in child process
 tts-worker.ts     → Edge TTS synthesis (runs isolated)
 translator.ts     → OpenAI-compatible translation with retry
 feed.ts           → RSS/iTunes XML generation
 state.ts          → JSON state persistence
-config.ts         → YAML config loader
+config.ts         → YAML config loader with draft/runnable validation
 ```
 
-The pipeline runs in a **separate Node.js process** to keep the Express server responsive during long translation and TTS operations.
+The pipeline runs in a **separate Node.js process** to keep the Express server responsive during long translation and TTS operations. The server and admin UI can start with draft config; scheduler and pipeline execution only start after runnable setup is complete.
 
 ## Tech stack
 

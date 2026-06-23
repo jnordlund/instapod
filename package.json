@@ -1,6 +1,6 @@
 {
     "name": "instapod",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "Convert Instapaper articles to podcast episodes via TTS",
     "type": "module",
     "main": "dist/index.js",
