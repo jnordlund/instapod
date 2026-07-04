@@ -4,7 +4,7 @@ import { ConfigValidationError } from "../src/config.js";
 import { createServer } from "../src/server.js";
 import { StateManager } from "../src/state.js";
 import type { AppConfig } from "../src/types.js";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import type { Server } from "node:http";
@@ -62,6 +62,10 @@ function makeConfig(): AppConfig {
             description: "A test feed",
             language: "sv",
             author: "Tester",
+        },
+        feed_access: {
+            enabled: false,
+            token: "",
         },
         admin: {
             password: "secret",
@@ -124,6 +128,10 @@ describe("mergeConfigUpdate", () => {
                 port: 9090,
                 base_url: "https://new.example.com",
             },
+            feed_access: {
+                enabled: true,
+                token: "abc1234567890_xyz",
+            },
         });
 
         expect(merged.instapaper.consumer_secret).toBe("cs");
@@ -135,6 +143,10 @@ describe("mergeConfigUpdate", () => {
         expect(merged.server).toEqual({
             port: 9090,
             base_url: "https://new.example.com",
+        });
+        expect(merged.feed_access).toEqual({
+            enabled: true,
+            token: "abc1234567890_xyz",
         });
     });
 });
@@ -219,6 +231,10 @@ describe("admin trigger", () => {
         expect(maskedConfig.instapaper.password).toBe("");
         expect(maskedConfig.translation.api_key).toBe("");
         expect(maskedConfig.admin.password).toBe("••••••••");
+        expect(maskedConfig.feed_access).toEqual({
+            enabled: false,
+            token: "",
+        });
 
         const trigger = await fetch(`${baseUrl}/api/trigger`, {
             method: "POST",
@@ -230,5 +246,55 @@ describe("admin trigger", () => {
         expect(body.status).toBe("blocked");
         expect(body.onboarding.runnable).toBe(false);
         expect(triggered).toBe(false);
+    });
+});
+
+describe("feed access routes", () => {
+    async function startTestServer(config: AppConfig) {
+        const dataDir = mkdtempSync(join(tmpdir(), "instapod-feed-access-test-"));
+        tempDirs.push(dataDir);
+        config.data_dir = dataDir;
+        mkdirSync(join(dataDir, "audio"), { recursive: true });
+        writeFileSync(join(dataDir, "audio", "test.mp3"), "audio");
+
+        const app = createServer(
+            config,
+            new StateManager(dataDir),
+            async () => {}
+        );
+        const server = app.listen(0);
+        servers.push(server);
+        await new Promise<void>((resolve) => server.once("listening", resolve));
+        const address = server.address();
+        if (!address || typeof address === "string") {
+            throw new Error("Expected TCP test server address");
+        }
+        return `http://127.0.0.1:${address.port}`;
+    }
+
+    it("serves legacy feed and audio routes when token protection is disabled", async () => {
+        const config = makeConfig();
+        const baseUrl = await startTestServer(config);
+
+        expect((await fetch(`${baseUrl}/feed`)).status).toBe(200);
+        expect((await fetch(`${baseUrl}/abc1234567890_xyz/feed`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/audio/test.mp3`)).status).toBe(200);
+        expect((await fetch(`${baseUrl}/abc1234567890_xyz/audio/test.mp3`)).status).toBe(404);
+    });
+
+    it("requires the configured token for feed and audio routes when enabled", async () => {
+        const config = makeConfig();
+        config.feed_access = {
+            enabled: true,
+            token: "abc1234567890_xyz",
+        };
+        const baseUrl = await startTestServer(config);
+
+        expect((await fetch(`${baseUrl}/feed`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/wrongtoken123456/feed`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/abc1234567890_xyz/feed`)).status).toBe(200);
+        expect((await fetch(`${baseUrl}/audio/test.mp3`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/wrongtoken123456/audio/test.mp3`)).status).toBe(404);
+        expect((await fetch(`${baseUrl}/abc1234567890_xyz/audio/test.mp3`)).status).toBe(200);
     });
 });

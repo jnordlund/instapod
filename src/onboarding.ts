@@ -5,6 +5,7 @@ import type {
     OnboardingStep,
     OnboardingStepStatus,
 } from "./types.js";
+import { getFeedUrl } from "./feed-access.js";
 
 interface OnboardingStateSnapshot {
     episodeCount: number;
@@ -110,7 +111,7 @@ export function getOnboardingStatus(
             feedReady ? "complete" : "missing",
             true,
             feedReady
-                ? `Podcast feed will be served at ${config.server.base_url.replace(/\/$/, "")}/feed.`
+                ? `Podcast feed will be served at ${getFeedUrl(config)}.`
                 : "Add the public base URL and feed metadata.",
             "Add feed settings"
         ),
@@ -142,7 +143,7 @@ export function getOnboardingStatus(
         runnable,
         blockingIssues,
         steps,
-        feedUrl: feedReady ? `${config.server.base_url.replace(/\/$/, "")}/feed` : null,
+        feedUrl: feedReady ? getFeedUrl(config) : null,
         firstRunComplete,
         episodeCount: state.episodeCount,
         lastRun: state.lastRun,

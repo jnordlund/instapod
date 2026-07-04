@@ -42,6 +42,10 @@ function makeConfig(overrides: Partial<AppConfig> = {}): AppConfig {
             language: "sv",
             author: "Tester",
         },
+        feed_access: {
+            enabled: false,
+            token: "",
+        },
         admin: {
             password: "secret",
             session_secret: "0123456789abcdef0123456789abcdef",
@@ -89,5 +93,20 @@ describe("onboarding status", () => {
         expect(status.blockingIssues.join(" ")).toContain("translation.api_key");
         expect(status.steps.find((step) => step.id === "instapaper")?.status).toBe("missing");
         expect(status.steps.find((step) => step.id === "first_run")?.status).toBe("blocked");
+    });
+
+    it("reports tokenized feed URL when feed access is enabled", () => {
+        const status = getOnboardingStatus(makeConfig({
+            feed_access: {
+                enabled: true,
+                token: "abc1234567890_xyz",
+            },
+        }), {
+            episodeCount: 0,
+            lastRun: null,
+        });
+
+        expect(status.runnable).toBe(true);
+        expect(status.feedUrl).toBe("https://pod.example.com/abc1234567890_xyz/feed");
     });
 });

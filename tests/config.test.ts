@@ -57,6 +57,8 @@ server:
         expect(config.spotify_upload.cli_path).toBe("save-to-spotify");
         expect(config.spotify_upload.language).toBe("sv");
         expect(config.spotify_upload.wait_for_ready).toBe(false);
+        expect(config.feed_access.enabled).toBe(false);
+        expect(config.feed_access.token).toBe("");
     });
 
     it("throws on missing required fields", () => {
@@ -125,5 +127,77 @@ schedule:
         expect(() => loadConfig(path)).toThrow("translation.api_base must be an http(s) URL");
         expect(() => loadConfig(path)).toThrow("server.port must be an integer between 1 and 65535");
         expect(() => loadConfig(path)).toThrow("schedule.cron must be a valid cron expression");
+    });
+
+    it("requires a valid token when feed access protection is enabled", () => {
+        const missingTokenPath = writeConfig(`
+instapaper:
+  consumer_key: "ck"
+  consumer_secret: "cs"
+  username: "user"
+  password: "pass"
+translation:
+  api_key: "sk-test"
+server:
+  base_url: "https://pod.example.com"
+feed_access:
+  enabled: true
+  token: ""
+`);
+
+        expect(() => loadConfig(missingTokenPath)).toThrow(
+            "feed_access.token is required when feed access protection is enabled"
+        );
+
+        const invalidTokenPath = writeConfig(`
+instapaper:
+  consumer_key: "ck"
+  consumer_secret: "cs"
+  username: "user"
+  password: "pass"
+translation:
+  api_key: "sk-test"
+server:
+  base_url: "https://pod.example.com"
+feed_access:
+  enabled: true
+  token: "not valid!"
+`);
+
+        expect(() => loadConfig(invalidTokenPath)).toThrow(
+            "feed_access.token must be 16-128 URL-safe characters"
+        );
+    });
+
+    it("loads feed access env overrides", () => {
+        const oldEnabled = process.env.FEED_ACCESS_ENABLED;
+        const oldToken = process.env.FEED_ACCESS_TOKEN;
+        process.env.FEED_ACCESS_ENABLED = "true";
+        process.env.FEED_ACCESS_TOKEN = "abc1234567890_xyz";
+
+        try {
+            const path = writeConfig(`
+instapaper:
+  consumer_key: "ck"
+  consumer_secret: "cs"
+  username: "user"
+  password: "pass"
+translation:
+  api_key: "sk-test"
+server:
+  base_url: "https://pod.example.com"
+`);
+
+            const config = loadConfig(path);
+            expect(config.feed_access).toEqual({
+                enabled: true,
+                token: "abc1234567890_xyz",
+            });
+        } finally {
+            if (oldEnabled === undefined) delete process.env.FEED_ACCESS_ENABLED;
+            else process.env.FEED_ACCESS_ENABLED = oldEnabled;
+            if (oldToken === undefined) delete process.env.FEED_ACCESS_TOKEN;
+            else process.env.FEED_ACCESS_TOKEN = oldToken;
+        }
     });
 });

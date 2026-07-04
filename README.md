@@ -35,7 +35,7 @@ docker compose up --build -d
 
 Open `http://localhost:8080/admin`, set an admin password, and complete the **Setup** tab.
 
-The feed is available at `http://localhost:8080/feed` once setup is complete and the pipeline has run.
+The feed is available at `http://localhost:8080/feed` once setup is complete and the pipeline has run. If feed access protection is enabled, use the tokenized URL shown in the admin UI instead.
 
 ### 3. Run locally
 
@@ -104,6 +104,14 @@ Once the feed is accessible, add it to your podcast app as a custom RSS feed:
 
 Your feed URL is: `https://<your-domain>/feed`
 
+If feed access protection is enabled in **Configuration → Server & Feed**, the URL becomes:
+
+```text
+https://<your-domain>/<token>/feed
+```
+
+Audio enclosures will use the same tokenized prefix.
+
 New episodes appear automatically as Instapod processes tagged articles.
 
 ## Configuration
@@ -125,6 +133,7 @@ Instapod validates configuration in two modes:
 | `spotify_upload` | `enabled`, `cli_path`, `show_id`, `new_show`, `language`, `summary`, `image_path`, `wait_for_ready` | Optional upload to Spotify via `save-to-spotify` |
 | `schedule` | `cron` | How often to check for new articles |
 | `server` | `port`, `base_url` | HTTP server port and public URL for feed links |
+| `feed_access` | `enabled`, `token` | Optional tokenized feed/audio URLs |
 | `feed` | `title`, `description`, `author`, `image` | Podcast feed metadata |
 | `data_dir` | — | Where audio files and state are stored |
 
@@ -200,6 +209,8 @@ If `show_id` is empty, you can set `new_show` to create/use a named show. If bot
 |---|---|---|
 | `GET` | `/feed` | RSS podcast feed (XML) |
 | `GET` | `/audio/:filename` | Stream an episode MP3 |
+| `GET` | `/:token/feed` | RSS podcast feed when feed access protection is enabled |
+| `GET` | `/:token/audio/:filename` | Stream MP3 when feed access protection is enabled |
 | `POST` | `/api/trigger` | Manually trigger a pipeline run when setup is complete |
 | `GET` | `/health` | Health check with episode count |
 | `GET` | `/api/onboarding/status` | Current setup readiness, blockers, and step status |

@@ -45,6 +45,10 @@ feed:
   language: "sv"
   author: "Jonas"
 
+feed_access:
+  enabled: false
+  token: ""  # Generate in Admin -> Configuration -> Server & Feed
+
 admin:
   # password: ""  # Set on first visit to /admin
   allowed_cidrs:
