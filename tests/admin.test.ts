@@ -140,6 +140,41 @@ describe("mergeConfigUpdate", () => {
 });
 
 describe("admin trigger", () => {
+    it("serves the private landing page at the root", async () => {
+        const dataDir = mkdtempSync(join(tmpdir(), "instapod-landing-test-"));
+        tempDirs.push(dataDir);
+        const config = makeConfig();
+        config.data_dir = dataDir;
+
+        const app = createServer(
+            config,
+            new StateManager(dataDir),
+            async () => {}
+        );
+        const server = app.listen(0);
+        servers.push(server);
+        await new Promise<void>((resolve) => server.once("listening", resolve));
+        const address = server.address();
+        if (!address || typeof address === "string") {
+            throw new Error("Expected TCP test server address");
+        }
+        const baseUrl = `http://127.0.0.1:${address.port}`;
+
+        const response = await fetch(`${baseUrl}/`, { redirect: "manual" });
+        const body = await response.text();
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("text/html");
+        expect(response.headers.get("location")).toBeNull();
+        expect(body).toContain("Open admin");
+        expect(body).toContain('href="/admin"');
+        expect(body).toContain("https://github.com/jnordlund/instapod");
+        expect(body).toContain('aria-label="GitHub repository"');
+
+        const favicon = await fetch(`${baseUrl}/favicon.ico`);
+        expect(favicon.status).toBe(204);
+    });
+
     it("blocks manual pipeline runs until config is runnable", async () => {
         const dataDir = mkdtempSync(join(tmpdir(), "instapod-admin-test-"));
         tempDirs.push(dataDir);
