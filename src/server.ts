@@ -5,6 +5,7 @@ import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
 import { generateFeed } from "./feed.js";
 import { createAdminRouter } from "./admin.js";
+import { renderLandingPage } from "./landing.js";
 
 export function createServer(
     config: AppConfig,
@@ -32,7 +33,12 @@ export function createServer(
     app.use(createAdminRouter(getConfig, setConfig, state, triggerRun, onConfigChanged));
 
     app.get("/", (_req, res) => {
-        res.redirect("/admin");
+        res.set("Content-Type", "text/html; charset=utf-8");
+        res.send(renderLandingPage());
+    });
+
+    app.get("/favicon.ico", (_req, res) => {
+        res.status(204).end();
     });
 
     /**
