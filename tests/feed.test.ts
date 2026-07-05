@@ -28,6 +28,7 @@ const mockConfig: AppConfig = {
         language: "sv",
         author: "Tester",
     },
+    feed_access: { enabled: false, token: "" },
     data_dir: "/tmp/instapod-test",
 };
 
@@ -76,6 +77,23 @@ describe("generateFeed", () => {
             'url="https://pod.example.com/audio/1001-first-article.mp3"'
         );
         expect(xml).toContain('type="audio/mpeg"');
+    });
+
+    it("uses tokenized feed and audio URLs when feed access is enabled", () => {
+        const xml = generateFeed({
+            ...mockConfig,
+            feed_access: {
+                enabled: true,
+                token: "abc1234567890_xyz",
+            },
+        }, mockEpisodes);
+
+        expect(xml).toContain(
+            'href="https://pod.example.com/abc1234567890_xyz/feed"'
+        );
+        expect(xml).toContain(
+            'url="https://pod.example.com/abc1234567890_xyz/audio/1001-first-article.mp3"'
+        );
     });
 
     it("formats duration correctly", () => {

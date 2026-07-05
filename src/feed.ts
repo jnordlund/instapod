@@ -1,4 +1,5 @@
 import type { AppConfig, ProcessedBookmark } from "./types.js";
+import { getAudioUrl, getFeedUrl } from "./feed-access.js";
 
 /**
  * Generate a valid RSS 2.0 podcast feed XML with iTunes namespace.
@@ -8,10 +9,11 @@ export function generateFeed(
     episodes: ProcessedBookmark[]
 ): string {
     const baseUrl = config.server.base_url.replace(/\/$/, "");
+    const feedUrl = getFeedUrl(config);
 
     const items = episodes
         .map((ep) => {
-            const audioUrl = `${baseUrl}/audio/${encodeURIComponent(ep.filename)}`;
+            const audioUrl = getAudioUrl(config, ep.filename);
             const durationFormatted = formatDuration(ep.duration);
 
             return `    <item>
@@ -37,7 +39,7 @@ export function generateFeed(
     <link>${escapeXml(baseUrl)}</link>
     <description>${escapeXml(config.feed.description)}</description>
     <language>${escapeXml(config.feed.language)}</language>
-    <atom:link href="${escapeXml(baseUrl)}/feed" rel="self" type="application/rss+xml" />
+    <atom:link href="${escapeXml(feedUrl)}" rel="self" type="application/rss+xml" />
     <itunes:author>${escapeXml(config.feed.author)}</itunes:author>
     <itunes:summary>${escapeXml(config.feed.description)}</itunes:summary>
     <itunes:explicit>no</itunes:explicit>

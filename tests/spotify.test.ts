@@ -60,6 +60,7 @@ const BASE_CONFIG: AppConfig = {
         language: "sv",
         author: "Tester",
     },
+    feed_access: { enabled: false, token: "" },
     data_dir: "/tmp/instapod-test",
 };
 

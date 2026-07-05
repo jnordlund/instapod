@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import yaml from "js-yaml";
 import cron from "node-cron";
 import type { AppConfig } from "./types.js";
+import { FEED_ACCESS_TOKEN_PATTERN } from "./feed-access.js";
 import {
     DEFAULT_TEXT_PROMPT_TEMPLATE,
     DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -65,6 +66,8 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         SPOTIFY_UPLOAD_SUMMARY: "spotify_upload.summary",
         SPOTIFY_UPLOAD_IMAGE_PATH: "spotify_upload.image_path",
         SPOTIFY_UPLOAD_WAIT_FOR_READY: "spotify_upload.wait_for_ready",
+        FEED_ACCESS_ENABLED: "feed_access.enabled",
+        FEED_ACCESS_TOKEN: "feed_access.token",
         SERVER_PORT: "server.port",
         SERVER_BASE_URL: "server.base_url",
         DATA_DIR: "data_dir",
@@ -88,7 +91,8 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
             target[lastKey] = parseInt(envValue, 10);
         } else if (
             configPath === "spotify_upload.enabled" ||
-            configPath === "spotify_upload.wait_for_ready"
+            configPath === "spotify_upload.wait_for_ready" ||
+            configPath === "feed_access.enabled"
         ) {
             target[lastKey] = parseBoolean(envValue);
         } else {
@@ -128,6 +132,8 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "feed.description": "Artiklar upplästa som podcast",
     "feed.language": "sv",
     "feed.author": "Instapod",
+    "feed_access.enabled": false,
+    "feed_access.token": "",
     "admin.allowed_cidrs": [
         "10.0.0.0/8",
         "172.16.0.0/12",
@@ -329,6 +335,7 @@ export function validateConfig(
         "schedule",
         "server",
         "feed",
+        "feed_access",
         "admin",
         "data_dir",
     ], issues);
@@ -367,6 +374,10 @@ export function validateConfig(
         "language",
         "author",
         "image",
+    ], issues);
+    rejectUnknownKeys(config, "feed_access", [
+        "enabled",
+        "token",
     ], issues);
     rejectUnknownKeys(config, "admin", [
         "password",
@@ -424,6 +435,23 @@ export function validateConfig(
     requireString(config, "feed.language", issues, missing);
     requireString(config, "feed.author", issues, missing);
     optionalHttpUrl(config, "feed.image", issues);
+
+    const feedAccess = getNestedValue(config, "feed_access");
+    if (feedAccess !== undefined) {
+        if (!isRecord(feedAccess)) {
+            issues.push("feed_access must be an object");
+        } else {
+            requireBoolean(config, "feed_access.enabled", issues);
+            optionalString(config, "feed_access.token", issues);
+            const enabled = getNestedValue(config, "feed_access.enabled") === true;
+            const token = getNestedValue(config, "feed_access.token");
+            if (enabled && isMissing(token)) {
+                issues.push("feed_access.token is required when feed access protection is enabled");
+            } else if (typeof token === "string" && token.length > 0 && !FEED_ACCESS_TOKEN_PATTERN.test(token)) {
+                issues.push("feed_access.token must be 16-128 URL-safe characters (A-Z, a-z, 0-9, _ or -)");
+            }
+        }
+    }
 
     const admin = getNestedValue(config, "admin");
     if (admin !== undefined) {

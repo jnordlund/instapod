@@ -55,6 +55,11 @@ export interface FeedConfig {
     image?: string;
 }
 
+export interface FeedAccessConfig {
+    enabled: boolean;
+    token: string;
+}
+
 export interface AdminConfig {
     password?: string;
     allowed_cidrs?: string[];
@@ -70,6 +75,7 @@ export interface AppConfig {
     schedule: ScheduleConfig;
     server: ServerConfig;
     feed: FeedConfig;
+    feed_access: FeedAccessConfig;
     admin?: AdminConfig;
     data_dir: string;
 }

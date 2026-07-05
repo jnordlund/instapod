@@ -690,6 +690,21 @@ header h1 {
   font-size: 0.75rem;
   color: var(--text2);
 }
+.field-with-action {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.field-with-action input { flex: 1; min-width: 0; }
+@media (max-width: 600px) {
+  .field-with-action {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .field-with-action .btn {
+    justify-content: center;
+  }
+}
 .checkbox-row {
   display: inline-flex;
   align-items: center;
@@ -766,20 +781,22 @@ header h1 {
 /* Toast */
 .toast {
   position: fixed;
-  bottom: 24px;
+  top: 24px;
   right: 24px;
+  max-width: calc(100vw - 48px);
   padding: 12px 20px;
   border-radius: 10px;
   font-size: 0.85rem;
   font-weight: 500;
   color: #fff;
   opacity: 0;
-  transform: translateY(10px);
+  transform: translateY(-10px);
   transition: all 0.3s ease;
   z-index: 100;
 }
 .toast.show { opacity: 1; transform: translateY(0); }
 .toast.success { background: var(--success); }
+.toast.warning { background: var(--warning); color: #14161f; }
 .toast.error { background: var(--danger); }
 
 /* Section toggle */
@@ -1246,7 +1263,7 @@ header h1 {
         </div>
         <div class="form-group">
           <label>Base URL</label>
-          <input type="url" id="cfg-server-base_url">
+          <input type="url" id="cfg-server-base_url" oninput="updateFeedAccessPreview()">
         </div>
         <div class="form-group">
           <label>Feed Title</label>
@@ -1273,11 +1290,34 @@ header h1 {
 
     <!-- Admin / Access Control -->
     <div class="card">
-      <h2><span class="icon">🔒</span> Access Control</h2>
+      <h2><span class="icon">🔒</span> Access Control &amp; Security</h2>
       <div class="form-grid">
         <div class="form-group">
-          <label>Admin Password</label>
-          <input type="password" id="cfg-admin-password">
+          <label>Admin Interface Password</label>
+          <input type="password" id="cfg-admin-password" autocomplete="new-password">
+          <div class="form-help">Keep the masked value to leave the password unchanged, or replace it to change admin access.</div>
+        </div>
+        <div class="form-group full" style="align-items:flex-start;">
+          <label class="checkbox-row">
+            <input type="checkbox" id="cfg-feed-access-enabled" onchange="updateFeedAccessPreview()">
+            Require token for feed and audio URLs
+          </label>
+          <div class="form-help">When enabled, feed and audio are served from /&lt;token&gt;/feed and /&lt;token&gt;/audio/...</div>
+        </div>
+        <div class="form-group full">
+          <label>Feed Token</label>
+          <div class="field-with-action">
+            <input type="text" id="cfg-feed-access-token" oninput="updateFeedAccessPreview()" autocomplete="off" spellcheck="false">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="generateFeedAccessToken()">Generate new token</button>
+          </div>
+          <div class="form-help">Use 16-128 URL-safe characters: letters, numbers, hyphen, or underscore.</div>
+        </div>
+        <div class="form-group full">
+          <label>Feed URL Preview</label>
+          <div class="field-with-action">
+            <input type="text" id="cfg-feed-access-preview" readonly>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="copyFeedUrl()">Copy feed URL</button>
+          </div>
         </div>
         <div class="form-group full">
           <label>Allowed CIDRs (one per line)</label>
@@ -1317,11 +1357,11 @@ function switchTab(name) {
 }
 
 // ── Toast notifications ──
-function showToast(msg, type = 'success') {
+function showToast(msg, type = 'success', durationMs = 3000) {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'toast ' + type + ' show';
-  setTimeout(() => el.classList.remove('show'), 3000);
+  setTimeout(() => el.classList.remove('show'), durationMs);
 }
 
 // ── Format helpers ──
@@ -1948,6 +1988,9 @@ function populateForm(c) {
   setValue('cfg-feed-description', c.feed?.description);
   setValue('cfg-feed-language', c.feed?.language);
   setValue('cfg-feed-image', c.feed?.image);
+  setChecked('cfg-feed-access-enabled', c.feed_access?.enabled);
+  setValue('cfg-feed-access-token', c.feed_access?.token);
+  updateFeedAccessPreview();
   setValue('cfg-admin-password', c.admin?.password);
   const cidrsEl = document.getElementById('cfg-admin-cidrs');
   if (cidrsEl) cidrsEl.value = (c.admin?.allowed_cidrs || []).join('\\n');
@@ -1968,6 +2011,56 @@ function setChecked(id, val) {
 function getChecked(id) {
   const el = document.getElementById(id);
   return Boolean(el && el.checked);
+}
+
+function getFeedAccessPreviewUrl() {
+  const baseUrl = getValue('cfg-server-base_url').trim().replace(/\\/$/, '');
+  const enabled = getChecked('cfg-feed-access-enabled');
+  const token = getValue('cfg-feed-access-token').trim();
+
+  if (!baseUrl) {
+    return '';
+  }
+  if (!enabled) {
+    return baseUrl + '/feed';
+  }
+  return baseUrl + '/' + (token || '<token>') + '/feed';
+}
+
+function updateFeedAccessPreview() {
+  setValue('cfg-feed-access-preview', getFeedAccessPreviewUrl());
+}
+
+function generateFeedAccessToken() {
+  if (!window.crypto || !window.crypto.getRandomValues) {
+    showToast('Browser crypto is not available', 'error');
+    return;
+  }
+
+  const bytes = new Uint8Array(32);
+  window.crypto.getRandomValues(bytes);
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const token = btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+
+  setValue('cfg-feed-access-token', token);
+  setChecked('cfg-feed-access-enabled', true);
+  updateFeedAccessPreview();
+  showToast('New feed token generated. After saving, update podcast player subscriptions; current feed URLs will stop working.', 'warning', 7000);
+}
+
+async function copyFeedUrl() {
+  const url = getFeedAccessPreviewUrl();
+  if (!url || url.includes('<token>')) {
+    showToast('Set base URL and token before copying', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast('Feed URL copied');
+  } catch {
+    showToast('Could not copy feed URL', 'error');
+  }
 }
 
 function buildSetupConfigUpdate() {
@@ -2129,6 +2222,10 @@ async function saveConfigForm() {
       language: getValue('cfg-feed-language'),
       author: getValue('cfg-feed-author'),
       image: getValue('cfg-feed-image') || undefined,
+    },
+    feed_access: {
+      enabled: getChecked('cfg-feed-access-enabled'),
+      token: getValue('cfg-feed-access-token').trim(),
     },
     admin: {
       password: getValue('cfg-admin-password'),
