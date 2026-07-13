@@ -33,6 +33,32 @@ server:
         expect(config.server.base_url).toBe("https://pod.example.com");
     });
 
+    it("accepts legacy spotify_upload.show_title config", () => {
+        const path = writeConfig(`
+instapaper:
+  consumer_key: "ck"
+  consumer_secret: "cs"
+  username: "user"
+  password: "pass"
+translation:
+  api_key: "sk-test"
+server:
+  base_url: "https://pod.example.com"
+spotify_upload:
+  enabled: true
+  cli_path: "save-to-spotify"
+  show_id: "spotify:show:abc"
+  new_show: "Instapod"
+  show_title: "Instapod"
+  language: "sv"
+  wait_for_ready: false
+`);
+
+        const config = loadConfig(path);
+        expect(config.spotify_upload?.new_show).toBe("Instapod");
+        expect((config.spotify_upload as Record<string, unknown>).show_title).toBe("Instapod");
+    });
+
     it("applies default values", () => {
         const path = writeConfig(`
 instapaper:

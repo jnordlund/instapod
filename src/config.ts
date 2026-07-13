@@ -361,6 +361,7 @@ export function validateConfig(
         "cli_path",
         "show_id",
         "new_show",
+        "show_title",
         "language",
         "summary",
         "image_path",
@@ -417,6 +418,7 @@ export function validateConfig(
             requireBoolean(config, "spotify_upload.wait_for_ready", issues);
             optionalString(config, "spotify_upload.show_id", issues);
             optionalString(config, "spotify_upload.new_show", issues);
+            optionalString(config, "spotify_upload.show_title", issues);
             optionalString(config, "spotify_upload.summary", issues);
             optionalString(config, "spotify_upload.image_path", issues);
         }
