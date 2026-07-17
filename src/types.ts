@@ -31,6 +31,7 @@ export interface SpotifyUploadConfig {
     enabled: boolean;
     cli_path: string;
     show_id?: string;
+    show_title?: string;
     new_show?: string;
     language: string;
     summary?: string;

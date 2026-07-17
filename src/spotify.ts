@@ -61,6 +61,29 @@ export interface SpotifyAuthResult {
     error?: string;
 }
 
+export interface SpotifyShow {
+    id: string;
+    title: string;
+    createdAt?: string;
+    lastEpisodeUploadedAt?: string;
+}
+
+export interface SpotifyShowsResult {
+    ok: boolean;
+    shows: SpotifyShow[];
+    stdout: string;
+    stderr: string;
+    error?: string;
+}
+
+export interface SpotifyShowCreateResult {
+    ok: boolean;
+    show?: SpotifyShow;
+    stdout: string;
+    stderr: string;
+    error?: string;
+}
+
 interface ActiveSpotifyAuth {
     child: ChildProcessWithoutNullStreams;
     output: string;
@@ -530,6 +553,84 @@ export function cancelSpotifyHeadlessAuth(): SpotifyAuthResult {
     };
 }
 
+export async function listSpotifyShows(
+    config: AppConfig
+): Promise<SpotifyShowsResult> {
+    const result = await runSaveToSpotify(config, ["--json", "shows"], {
+        timeoutMs: 30_000,
+    });
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            shows: [],
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: normalizeCommandError("shows", result),
+        };
+    }
+
+    return {
+        ok: true,
+        shows: parseSpotifyShows(result.json, result.stdout),
+        stdout: result.stdout,
+        stderr: result.stderr,
+    };
+}
+
+export async function createSpotifyShow(
+    config: AppConfig,
+    input: { title: string }
+): Promise<SpotifyShowCreateResult> {
+    const title = input.title.trim();
+    if (!title) {
+        return {
+            ok: false,
+            stdout: "",
+            stderr: "",
+            error: "Show title is required.",
+        };
+    }
+
+    const spotify = getSpotifyUploadConfig(config);
+    const args = ["--json", "shows", "create", "--title", title];
+    const summary = config.feed.description?.trim();
+    if (summary) {
+        args.push("--summary", summary);
+    }
+
+    const language = spotify.language?.trim() || config.feed.language || "en";
+    if (language) {
+        args.push("--language", language);
+    }
+
+    if (spotify.image_path?.trim()) {
+        args.push("--image", expandHome(spotify.image_path.trim()));
+    }
+
+    const result = await runSaveToSpotify(config, args, {
+        timeoutMs: COMMAND_TIMEOUT_MS,
+    });
+
+    if (!result.ok) {
+        return {
+            ok: false,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: normalizeCommandError("shows create", result),
+        };
+    }
+
+    const show = parseSpotifyShow(result.json) ?? parseSpotifyShows(result.json, result.stdout)[0];
+    return {
+        ok: Boolean(show),
+        show,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        error: show ? undefined : "Show was created, but no show ID was returned.",
+    };
+}
+
 export async function uploadEpisodeToSpotify(
     config: AppConfig,
     input: {
@@ -552,10 +653,9 @@ export async function uploadEpisodeToSpotify(
         args.push("--summary", summary);
     }
 
-    if (spotify.show_id?.trim()) {
-        args.push("--show-id", spotify.show_id.trim());
-    } else if (spotify.new_show?.trim()) {
-        args.push("--new-show", spotify.new_show.trim());
+    const uploadShowId = await resolveSpotifyUploadShowId(config, spotify);
+    if (uploadShowId) {
+        args.push("--show-id", uploadShowId);
     }
 
     const language = spotify.language?.trim() || config.feed.language || "en";
@@ -579,7 +679,7 @@ export async function uploadEpisodeToSpotify(
         uploadedAt: new Date().toISOString(),
         episodeId: findStringValue(result.json, ["episode_id", "episodeId", "id"]),
         episodeUri: findStringValue(result.json, ["episode_uri", "episodeUri", "uri"]),
-        showId: findStringValue(result.json, ["show_id", "showId"]),
+        showId: findStringValue(result.json, ["show_id", "showId"]) ?? uploadShowId,
     };
 
     if (spotify.wait_for_ready) {
@@ -602,6 +702,46 @@ export async function uploadEpisodeToSpotify(
     }
 
     return state;
+}
+
+async function resolveSpotifyUploadShowId(
+    config: AppConfig,
+    spotify: SpotifyUploadConfig
+): Promise<string | undefined> {
+    const configuredShowId = spotify.show_id?.trim();
+    if (configuredShowId) return configuredShowId;
+
+    const legacyShowTitle = spotify.new_show?.trim();
+    if (!legacyShowTitle) return undefined;
+
+    const existingShow = await findReusableSpotifyShow(config, legacyShowTitle);
+    if (existingShow) return existingShow.id;
+
+    const created = await createSpotifyShow(config, { title: legacyShowTitle });
+    if (!created.ok || !created.show?.id) {
+        throw new Error(
+            `save-to-spotify shows create failed: ${created.error || "No show ID returned."}`
+        );
+    }
+
+    return created.show.id;
+}
+
+async function findReusableSpotifyShow(
+    config: AppConfig,
+    title: string
+): Promise<SpotifyShow | undefined> {
+    const listed = await listSpotifyShows(config);
+    if (!listed.ok) {
+        throw new Error(
+            `save-to-spotify shows failed: ${listed.error || "Could not list shows."}`
+        );
+    }
+
+    const normalizedTitle = normalizeSpotifyShowTitle(title);
+    return listed.shows
+        .filter((show) => normalizeSpotifyShowTitle(show.title) === normalizedTitle)
+        .sort(compareReusableSpotifyShows)[0];
 }
 
 function runSaveToSpotify(
@@ -725,17 +865,204 @@ function parseJsonOutput(stdout: string): unknown | undefined {
     try {
         return JSON.parse(trimmed);
     } catch {
-        const first = trimmed.indexOf("{");
-        const last = trimmed.lastIndexOf("}");
-        if (first >= 0 && last > first) {
+        const objectCandidate = jsonSubstring(trimmed, "{", "}");
+        if (objectCandidate) {
             try {
-                return JSON.parse(trimmed.slice(first, last + 1));
+                return JSON.parse(objectCandidate);
+            } catch {
+                // Try an array payload below.
+            }
+        }
+
+        const arrayCandidate = jsonSubstring(trimmed, "[", "]");
+        if (arrayCandidate) {
+            try {
+                return JSON.parse(arrayCandidate);
             } catch {
                 return undefined;
             }
         }
         return undefined;
     }
+}
+
+function jsonSubstring(value: string, open: string, close: string): string | undefined {
+    const first = value.indexOf(open);
+    const last = value.lastIndexOf(close);
+    if (first < 0 || last <= first) return undefined;
+    return value.slice(first, last + 1);
+}
+
+function parseSpotifyShows(value: unknown, stdout: string): SpotifyShow[] {
+    const parsed = extractSpotifyShowRecords(value)
+        .map(normalizeSpotifyShowRecord)
+        .filter((show): show is SpotifyShow => Boolean(show));
+
+    const shows = parsed.length > 0 ? parsed : parseSpotifyShowsText(stdout);
+    return uniqueSpotifyShows(shows);
+}
+
+function parseSpotifyShow(value: unknown): SpotifyShow | undefined {
+    return parseSpotifyShows(value, "")[0];
+}
+
+function extractSpotifyShowRecords(value: unknown): Record<string, unknown>[] {
+    if (Array.isArray(value)) {
+        return value.filter(isRecordValue);
+    }
+
+    if (!isRecordValue(value)) {
+        return [];
+    }
+
+    const candidates = [value.shows, value.items, value.results, value.data];
+    for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+            return candidate.filter(isRecordValue);
+        }
+    }
+
+    if (isRecordValue(value.show)) {
+        return [value.show];
+    }
+
+    return looksLikeSpotifyShow(value) ? [value] : [];
+}
+
+function normalizeSpotifyShowRecord(
+    record: Record<string, unknown>
+): SpotifyShow | undefined {
+    const id = readStringValue(record, [
+        "id",
+        "show_id",
+        "showId",
+        "uri",
+        "show_uri",
+        "showUri",
+    ]);
+    if (!id) return undefined;
+
+    const title = readStringValue(record, ["title", "name", "show_title", "showTitle"]) || id;
+    const createdAt = readStringValue(record, [
+        "created_at",
+        "createdAt",
+        "created",
+        "created_time",
+        "createdTime",
+    ]);
+    const lastEpisodeUploadedAt = readStringValue(record, [
+        "last_episode_uploaded_at",
+        "lastEpisodeUploadedAt",
+        "last_uploaded_at",
+        "lastUploadedAt",
+    ]);
+
+    return {
+        id,
+        title,
+        createdAt,
+        lastEpisodeUploadedAt,
+    };
+}
+
+function parseSpotifyShowsText(stdout: string): SpotifyShow[] {
+    const shows: SpotifyShow[] = [];
+
+    for (const line of stdout.split(/\r?\n/)) {
+        const datedMatch = line.match(
+            /^\s*(spotify:show:\S+)\s+(.+?)\s+(\d{4}-\d{2}-\d{2}T\S+)\s*$/
+        );
+        if (datedMatch) {
+            shows.push({
+                id: datedMatch[1],
+                title: datedMatch[2].trim(),
+                createdAt: datedMatch[3],
+            });
+            continue;
+        }
+
+        const simpleMatch = line.match(/^\s*(spotify:show:\S+)\s+(.+?)\s*$/);
+        if (simpleMatch) {
+            shows.push({
+                id: simpleMatch[1],
+                title: simpleMatch[2].trim(),
+            });
+        }
+    }
+
+    return shows;
+}
+
+function uniqueSpotifyShows(shows: SpotifyShow[]): SpotifyShow[] {
+    const seen = new Set<string>();
+    const unique: SpotifyShow[] = [];
+
+    for (const show of shows) {
+        if (seen.has(show.id)) continue;
+        seen.add(show.id);
+        unique.push(show);
+    }
+
+    return unique;
+}
+
+function normalizeSpotifyShowTitle(title: string): string {
+    return title.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function compareReusableSpotifyShows(a: SpotifyShow, b: SpotifyShow): number {
+    const aRank = spotifyShowReuseRank(a);
+    const bRank = spotifyShowReuseRank(b);
+
+    if (aRank.hasEpisodeUpload !== bRank.hasEpisodeUpload) {
+        return bRank.hasEpisodeUpload - aRank.hasEpisodeUpload;
+    }
+
+    return bRank.timestamp - aRank.timestamp;
+}
+
+function spotifyShowReuseRank(show: SpotifyShow): {
+    hasEpisodeUpload: number;
+    timestamp: number;
+} {
+    const uploadTimestamp = parseSpotifyTimestamp(show.lastEpisodeUploadedAt);
+    if (uploadTimestamp !== undefined) {
+        return { hasEpisodeUpload: 1, timestamp: uploadTimestamp };
+    }
+
+    return {
+        hasEpisodeUpload: 0,
+        timestamp: parseSpotifyTimestamp(show.createdAt) ?? 0,
+    };
+}
+
+function parseSpotifyTimestamp(value?: string): number | undefined {
+    if (!value) return undefined;
+    const timestamp = Date.parse(value);
+    return Number.isNaN(timestamp) ? undefined : timestamp;
+}
+
+function looksLikeSpotifyShow(value: Record<string, unknown>): boolean {
+    return Boolean(
+        readStringValue(value, ["id", "show_id", "showId", "uri", "show_uri", "showUri"])
+    );
+}
+
+function readStringValue(
+    record: Record<string, unknown>,
+    keys: string[]
+): string | undefined {
+    for (const key of keys) {
+        const candidate = record[key];
+        if (typeof candidate === "string" && candidate.trim().length > 0) {
+            return candidate.trim();
+        }
+    }
+    return undefined;
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function findStringValue(value: unknown, keys: string[]): string | undefined {
