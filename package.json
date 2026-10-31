@@ -12,7 +12,7 @@
         "test:watch": "vitest"
     },
     "dependencies": {
-        "@andresaya/edge-tts": "^1.4.0",
+        "@andresaya/edge-tts": "^1.9.1",
         "express": "^4.21.0",
         "franc-min": "^6.2.0",
         "html-to-text": "^9.0.5",
