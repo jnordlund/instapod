@@ -711,6 +711,20 @@ header h1 {
 .btn-ghost:hover { background: var(--surface2); color: var(--text); }
 .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
 
+.tts-check {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--text2);
+}
+.tts-check[data-state="checking"] { border-color: var(--accent); color: var(--accent); }
+.tts-check[data-state="verified"] { border-color: var(--success); color: var(--success); }
+.tts-check[data-state="failed"] { border-color: var(--danger); color: var(--danger); }
+.tts-check-title { display: block; font-weight: 600; }
+.tts-check-detail { display: block; color: var(--text2); margin-top: 4px; }
+
 /* Form elements */
 .form-grid {
   display: grid;
@@ -1265,11 +1279,11 @@ header h1 {
         <div class="form-group full">
           <label for="tts-preview-text">Voice Preview Text</label>
           <textarea id="tts-preview-text" rows="2" maxlength="500">Det här är ett röstprov från Instapod.</textarea>
-          <div class="form-help">Uses the current form values, including unsaved changes. API usage may be billed. No episode is created.</div>
+          <div class="form-help">Tests the current connection, model, and voice by generating a short audio sample, including unsaved settings. API usage may be billed. No episode is created.</div>
         </div>
-        <div class="form-group full">
-          <button type="button" class="btn btn-ghost btn-sm" id="tts-preview-btn" onclick="previewTts()">Generate voice preview</button>
-          <div id="tts-preview-status" role="status" aria-live="polite" class="form-help"></div>
+        <div class="form-group full" id="tts-connection-check">
+          <button type="button" class="btn btn-ghost btn-sm" id="tts-preview-btn" onclick="previewTts()">Test connection &amp; voice</button>
+          <div id="tts-preview-status" role="status" aria-live="polite" aria-atomic="true" class="tts-check" data-state="untested">Not tested.</div>
           <audio id="tts-preview-audio" controls style="display:none;width:100%;margin-top:8px" aria-label="Generated voice preview"></audio>
         </div>
       </div>
@@ -1940,6 +1954,21 @@ const DEFAULT_OPENAI_TTS = ${defaultOpenAiTtsJs};
 let ttsPreviewUrl = null;
 let ttsPreviewController = null;
 
+function setTtsCheckStatus(state, title, detail = '') {
+  const status = document.getElementById('tts-preview-status');
+  status.dataset.state = state;
+  const heading = document.createElement('span');
+  heading.className = 'tts-check-title';
+  heading.textContent = title;
+  status.replaceChildren(heading);
+  if (detail) {
+    const description = document.createElement('span');
+    description.className = 'tts-check-detail';
+    description.textContent = detail;
+    status.appendChild(description);
+  }
+}
+
 function clearTtsPreview() {
   if (ttsPreviewController) ttsPreviewController.abort();
   ttsPreviewController = null;
@@ -1949,7 +1978,7 @@ function clearTtsPreview() {
   audio.style.display = 'none';
   if (ttsPreviewUrl) URL.revokeObjectURL(ttsPreviewUrl);
   ttsPreviewUrl = null;
-  document.getElementById('tts-preview-status').textContent = '';
+  setTtsCheckStatus('untested', 'Not tested', 'Test the connection and voice for the current settings.');
 }
 
 function updateTtsFields() {
@@ -1985,21 +2014,22 @@ function getTtsFormConfig() {
 
 async function previewTts() {
   const btn = document.getElementById('tts-preview-btn');
-  const status = document.getElementById('tts-preview-status');
   clearTtsPreview();
   btn.disabled = true;
+  btn.textContent = 'Testing connection...';
   const controller = new AbortController();
   ttsPreviewController = controller;
-  status.textContent = 'Generating voice preview...';
+  const config = getTtsFormConfig();
+  setTtsCheckStatus('checking', 'Checking connection and voice...', 'Generating a short audio sample with the current settings.');
   try {
     const r = await apiFetch('/api/tts/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({ text: getValue('tts-preview-text'), tts: getTtsFormConfig() }),
+      body: JSON.stringify({ text: getValue('tts-preview-text'), tts: config }),
     });
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
-      throw new Error(data.error || 'Voice preview failed');
+      throw new Error(data.error || 'The TTS connection test failed.');
     }
     const blob = await r.blob();
     if (controller.signal.aborted) return;
@@ -2007,12 +2037,19 @@ async function previewTts() {
     const audio = document.getElementById('tts-preview-audio');
     audio.src = ttsPreviewUrl;
     audio.style.display = '';
-    status.textContent = 'Voice preview ready. Press play to listen.';
+    const checkedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const target = config.provider === 'openai'
+      ? 'OpenAI / compatible · ' + config.openai.model + ' · ' + config.openai.voice
+      : 'Edge TTS · ' + config.voice;
+    setTtsCheckStatus('verified', '✓ Connection and voice verified', target + ' · Tested at ' + checkedAt + '. Audio received successfully. Press play to listen.');
   } catch (e) {
-    if (!controller.signal.aborted) status.textContent = e.message || 'Voice preview failed';
+    if (!controller.signal.aborted) {
+      setTtsCheckStatus('failed', 'Connection test failed', e.message || 'Could not contact the TTS service. Check the API settings and try again.');
+    }
   } finally {
     if (ttsPreviewController === controller) ttsPreviewController = null;
     btn.disabled = false;
+    btn.textContent = 'Test connection & voice';
   }
 }
 

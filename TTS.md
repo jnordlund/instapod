@@ -15,7 +15,9 @@ The default base URL is `https://api.openai.com/v1`. Enter a dedicated **TTS API
 
 Optional voice instructions describe tone and delivery. Speech API services must support the `instructions` parameter when it is supplied. Numeric speed (0.25–4.0, default 1.0) applies only to Speech API. Audio Chat uses voice instructions for delivery. All episodes are MP3, and the selected OpenAI-compatible voice is used across languages.
 
-**Generate voice preview** uses the current form values, including unsaved changes, and a sample of up to 500 characters. Press play in the embedded player when it is ready. Preview audio is temporary: it does not save config, create an episode, update RSS, or upload to Spotify. Generation only happens after clicking the button and may incur API usage charges. Editing the settings cancels an in-flight preview and clears stale audio.
+**Test connection & voice** tests the current form values, including unsaved changes, by generating a sample of up to 500 characters. The status shows Not tested, Checking, Connection and voice verified (green), or Connection test failed (red). A successful check names the tested model/voice and time, and offers the generated audio for playback. It verifies that the selected endpoint can generate audio with those settings, rather than merely accepting a key or listing models.
+
+The result applies to the last explicit test in the current page, not ongoing service availability. Editing the settings cancels an in-flight test and clears the verification and stale audio; loading or saving configuration also resets the result. Preview audio is temporary: it does not save config, create an episode, update RSS, or upload to Spotify. Generation only happens after clicking the button and may incur API usage charges.
 
 ## Narration checks and failures
 
