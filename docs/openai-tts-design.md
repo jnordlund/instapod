@@ -32,13 +32,17 @@ See [ADR 0001](adr/0001-support-separate-openai-audio-contracts.md) for explicit
 
 ## Verification boundary
 
-Verified: `npm run build`; 127 passing tests in 13 files. The Realtime tests exercise GA session configuration, HTTP and event errors, changed/missing transcripts, incomplete/corrupt streams, timeouts, cancellation, local empty-key support, lossless chunking through the real worker and encoder, staged-file cleanup, and missing-encoder preflight. Existing Edge, Audio Chat, Speech, model-discovery, and authenticated admin-preview tests also pass.
+Latest automated verification: `npm run build`; 129 passing tests in 13 files, including the subsequent text-free mismatch diagnostics. The Realtime tests exercise GA session configuration, HTTP and event errors, changed/missing transcripts, incomplete/corrupt streams, timeouts, cancellation, local empty-key support, lossless chunking through the real worker and encoder, staged-file cleanup, and missing-encoder preflight. Existing Edge, Audio Chat, Speech, model-discovery, and authenticated admin-preview tests also pass.
 
 Realtime UI verification passed 20 Playwright checks, including default Edge selection, third-mode selection, suggested/custom model and voice names, separate speed ranges, model discovery, playable MP3 preview, failure status, cancellation of a stalled session, saving/reloading, and a 390-pixel layout check. The longer Realtime dropdown fits within the mobile form column. Earlier browser verification covered Audio Chat/Speech previews, model-discovery failures/empty catalogs, and stale lookup cancellation.
 
 A separately built Docker image passed an isolated Node 20 runtime test with networking disabled: the actual worker generated a three-chunk MP3 from a local Realtime mock, FFmpeg decoded the joined result without errors, the frame-based duration was 1.656 seconds, and no staging files remained. The existing deployed container was not restarted.
 
-Automated verification uses local mock providers, an offline synthetic MP3, and synthetic PCM tones. Real OpenAI narration quality, account permissions, and billing require a real-provider check and have not been verified by these tests.
+Automated verification uses local mock providers, an offline synthetic MP3, and synthetic PCM tones.
+
+A live isolated check on 2026-10-31 used `gpt-realtime-2.1-mini` with `cedar` on one translated Swedish article in seven fresh Realtime sessions. Six chunks matched the source under the strict transcript normalization. The seventh contained two word substitutions and was rejected. One retry of that chunk with identical input matched the source. This reproduces the reported failure type and demonstrates response variation; the exact original failed transcript was not retained and cannot be compared. The check did not publish an episode or modify pipeline state/configuration, and temporary article/transcript copies were removed afterwards. Production retry behavior was not changed.
+
+The live check establishes successful API access and complete audio/transcript responses for this configuration at that time. It does not independently verify the spoken audio's fidelity, reliability across other articles, general account permissions, or billing behavior.
 
 ## Official references checked on 2026-10-31
 
