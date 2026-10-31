@@ -16,7 +16,8 @@ import { InstapaperClient } from "./instapaper.js";
 import { getOnboardingStatus } from "./onboarding.js";
 import { testTranslationConfig } from "./translator.js";
 import { synthesize } from "./tts.js";
-import { DEFAULT_OPENAI_TTS, getTtsConfigIssues } from "./tts-config.js";
+import { DEFAULT_OPENAI_TTS, getTtsConfigIssues, resolveTtsConfig } from "./tts-config.js";
+import { listTtsModels, TTS_VOICE_SUGGESTIONS } from "./tts-catalog.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -197,6 +198,24 @@ export function createAdminRouter(
         ? err.issues.join("; ")
         : (err as Error).message || "Translation test failed";
       res.status(400).json({ ok: false, error: message });
+    }
+  });
+
+  router.post("/api/tts/models", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.once("close", onClose);
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), { tts: req.body?.tts ?? {} });
+      const models = await listTtsModels(resolveTtsConfig(candidate.tts).openai, controller.signal);
+      if (!controller.signal.aborted) res.json({ models });
+    } catch (err) {
+      const message = err instanceof ConfigValidationError ? err.issues.join("; ")
+        : err instanceof Error ? err.message : "Could not fetch TTS models";
+      if (!controller.signal.aborted) res.status(400).json({ error: message });
+    } finally {
+      res.off("close", onClose);
     }
   });
 
@@ -483,6 +502,7 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
 
 function renderAdminPage(): string {
   const defaultOpenAiTtsJs = JSON.stringify(DEFAULT_OPENAI_TTS);
+  const ttsVoiceSuggestionsJs = JSON.stringify(TTS_VOICE_SUGGESTIONS);
   const defaultTitlePromptJs = JSON.stringify(DEFAULT_TITLE_PROMPT_TEMPLATE);
   const defaultTextPromptJs = JSON.stringify(DEFAULT_TEXT_PROMPT_TEMPLATE);
 
@@ -724,6 +744,9 @@ header h1 {
 .tts-check[data-state="failed"] { border-color: var(--danger); color: var(--danger); }
 .tts-check-title { display: block; font-weight: 600; }
 .tts-check-detail { display: block; color: var(--text2); margin-top: 4px; }
+.tts-model-picker { display: flex; gap: 8px; }
+.tts-model-picker input { flex: 1; min-width: 0; width: 0; }
+.tts-model-picker button { white-space: nowrap; }
 
 /* Form elements */
 .form-grid {
@@ -1251,18 +1274,19 @@ header h1 {
         </div>
         <div class="form-group">
           <label for="cfg-tts-openai-model">TTS Model</label>
-          <input type="text" id="cfg-tts-openai-model" list="tts-model-suggestions" placeholder="gpt-audio-1.5">
+          <div class="tts-model-picker">
+            <input type="text" id="cfg-tts-openai-model" list="tts-model-suggestions" placeholder="gpt-audio-1.5">
+            <button type="button" class="btn btn-ghost btn-sm" id="tts-fetch-models-btn" onclick="fetchTtsModels()">Fetch models</button>
+          </div>
           <datalist id="tts-model-suggestions"><option value="gpt-audio-1.5"></datalist>
+          <div id="tts-models-status" role="status" aria-live="polite" class="form-help">Fetch models from your service, or enter a name.</div>
           <div class="form-help" id="tts-mode-help"></div>
         </div>
         <div class="form-group">
           <label for="cfg-tts-openai-voice">TTS Voice</label>
           <input type="text" id="cfg-tts-openai-voice" list="tts-voice-suggestions" placeholder="alloy">
-          <datalist id="tts-voice-suggestions">
-            <option value="alloy"><option value="ash"><option value="ballad"><option value="coral"><option value="echo">
-            <option value="sage"><option value="shimmer"><option value="verse"><option value="marin"><option value="cedar">
-          </datalist>
-          <div class="form-help">You can enter your service's own model and voice names.</div>
+          <datalist id="tts-voice-suggestions"></datalist>
+          <div class="form-help" id="tts-voice-help">OpenAI voice suggestions. You can also enter your service's own voice name.</div>
         </div>
         <div class="form-group" id="tts-speed-field">
           <label for="cfg-tts-openai-speed">Speech Speed</label>
@@ -1951,8 +1975,80 @@ async function cancelSpotifyAuth() {
 
 // ── Config form ──
 const DEFAULT_OPENAI_TTS = ${defaultOpenAiTtsJs};
+const TTS_VOICE_SUGGESTIONS = ${ttsVoiceSuggestionsJs};
 let ttsPreviewUrl = null;
 let ttsPreviewController = null;
+let ttsModelsController = null;
+let ttsModelsSourceValue = '';
+
+function setTtsSuggestions(id, values) {
+  const options = values.map(value => {
+    const option = document.createElement('option');
+    option.value = value;
+    return option;
+  });
+  document.getElementById(id).replaceChildren(...options);
+}
+
+function ttsModelsSource() {
+  return JSON.stringify([getValue('cfg-tts-provider'), getValue('cfg-tts-openai-api_base').trim(), getValue('cfg-tts-openai-api_key').trim()]);
+}
+
+function syncTtsModelsSource() {
+  const source = ttsModelsSource();
+  if (source === ttsModelsSourceValue) return;
+  ttsModelsSourceValue = source;
+  if (ttsModelsController) ttsModelsController.abort();
+  ttsModelsController = null;
+  setTtsSuggestions('tts-model-suggestions', [DEFAULT_OPENAI_TTS.model]);
+  document.getElementById('tts-models-status').textContent = 'Fetch models from your service, or enter a name.';
+  const button = document.getElementById('tts-fetch-models-btn');
+  button.disabled = false;
+  button.textContent = 'Fetch models';
+}
+
+function updateTtsVoiceSuggestions() {
+  const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
+  const legacy = speech && ['tts-1', 'tts-1-hd'].includes(getValue('cfg-tts-openai-model').trim());
+  const key = legacy ? 'tts-1' : speech ? 'speech' : 'audio-chat';
+  setTtsSuggestions('tts-voice-suggestions', TTS_VOICE_SUGGESTIONS[key]);
+  document.getElementById('tts-voice-help').textContent = 'Documented OpenAI voices for ' + (legacy ? 'tts-1 / tts-1-hd' : speech ? 'Speech API' : 'Audio Chat') + '. Custom voice names are also allowed; verify them with Test connection & voice.';
+}
+
+async function fetchTtsModels() {
+  syncTtsModelsSource();
+  if (ttsModelsController) ttsModelsController.abort();
+  const controller = new AbortController();
+  ttsModelsController = controller;
+  const source = ttsModelsSource();
+  const button = document.getElementById('tts-fetch-models-btn');
+  const status = document.getElementById('tts-models-status');
+  button.disabled = true;
+  button.textContent = 'Fetching...';
+  status.textContent = 'Fetching model names...';
+  try {
+    const r = await apiFetch('/api/tts/models', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ tts: { openai: { api_base: getValue('cfg-tts-openai-api_base').trim(), api_key: getValue('cfg-tts-openai-api_key').trim() } } }),
+    });
+    const data = await r.json();
+    if (controller.signal.aborted || source !== ttsModelsSource()) return;
+    if (!r.ok) throw new Error(data.error || 'Could not fetch models. Enter a model manually.');
+    if (!Array.isArray(data.models)) throw new Error('Invalid model list. Enter a model manually.');
+    setTtsSuggestions('tts-model-suggestions', data.models);
+    status.textContent = data.models.length
+      ? 'Fetched ' + data.models.length + ' models. The list may include models without audio support. Type to filter, then use Test connection & voice.'
+      : 'No models returned. Your selection is unchanged; you can enter a model manually.';
+  } catch (e) {
+    if (!controller.signal.aborted && source === ttsModelsSource()) status.textContent = e.message || 'Could not fetch models. Enter a model manually.';
+  } finally {
+    if (ttsModelsController === controller) {
+      ttsModelsController = null;
+      button.disabled = false;
+      button.textContent = 'Fetch models';
+    }
+  }
+}
 
 function setTtsCheckStatus(state, title, detail = '') {
   const status = document.getElementById('tts-preview-status');
@@ -1982,6 +2078,8 @@ function clearTtsPreview() {
 }
 
 function updateTtsFields() {
+  syncTtsModelsSource();
+  updateTtsVoiceSuggestions();
   const openai = getValue('cfg-tts-provider') === 'openai';
   const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
   document.getElementById('tts-edge-fields').style.display = openai ? 'none' : '';
@@ -2053,7 +2151,11 @@ async function previewTts() {
   }
 }
 
-document.getElementById('tts-settings').addEventListener('input', clearTtsPreview);
+document.getElementById('tts-settings').addEventListener('input', () => {
+  clearTtsPreview();
+  syncTtsModelsSource();
+  updateTtsVoiceSuggestions();
+});
 
 async function loadConfig() {
   try {

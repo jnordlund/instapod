@@ -52,6 +52,36 @@ async function setup() {
 }
 
 describe("voice preview admin API", () => {
+    it("requires authentication for model discovery", async () => {
+        const { base } = await setup();
+        const response = await fetch(`${base}/api/tts/models`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        expect(response.status).toBe(401);
+    });
+
+    it("discovers models with an unsaved endpoint and masked key before a model or voice is selected", async () => {
+        const admin = await setup();
+        const provider = express();
+        let authorization: string | undefined;
+        provider.get("/custom/models", (req, res) => {
+            authorization = req.get("authorization");
+            res.json({ data: [{ id: "local-voice-model" }, { id: "gpt-audio-1.5" }] });
+        });
+        const base = await listen(provider);
+        const before = readFileSync(admin.path, "utf-8");
+        const response = await fetch(`${admin.base}/api/tts/models`, {
+            method: "POST", headers: { Cookie: admin.cookie, "Content-Type": "application/json" },
+            body: JSON.stringify({ tts: { openai: { api_base: `${base}/custom`, api_key: "••••••••", model: "", voice: "" } } }),
+        });
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("no-store");
+        expect(await response.json()).toEqual({ models: ["gpt-audio-1.5", "local-voice-model"] });
+        expect(authorization).toBe("Bearer stored-tts-key");
+        expect(admin.config.tts.openai?.model).toBe("gpt-audio-1.5");
+        expect(admin.changed()).toBe(false);
+        expect(readFileSync(admin.path, "utf-8")).toBe(before);
+        expect(admin.state.getProcessedBookmarks()).toEqual([]);
+    });
+
     it("requires authentication and masks the dedicated TTS key", async () => {
         const { base, cookie } = await setup();
         const denied = await fetch(`${base}/api/tts/preview`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: "Hello" }) });

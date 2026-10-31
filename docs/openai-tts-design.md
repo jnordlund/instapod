@@ -7,6 +7,7 @@ Design accepted by the user on 2026-10-31 and implemented on `jncxm/openai-tts`.
 - Edge TTS remains the default, including for existing configuration files. Edge voice, rate, and pitch are retained when switching providers.
 - The OpenAI / compatible provider has explicit Audio Chat Completions and Speech API modes. Audio Chat is the OpenAI default, initially using `gpt-audio-1.5` and `alloy`; names remain editable.
 - Base URL defaults to `https://api.openai.com/v1`. A dedicated TTS key is masked in the admin API, preserved on masked saves, and never inherited from translation. Local services may omit it.
+- Manual model discovery reads `/models` from the current endpoint/key and populates editable suggestions without changing the selected model. Model listing does not prove audio support. Voice suggestions follow the documented Audio Chat/Speech API lists, including the smaller `tts-1`/`tts-1-hd` set; custom names remain allowed. Failed/empty lookups preserve manual entry, and source changes cancel stale requests.
 - One OpenAI-compatible voice applies across article languages. Optional instructions control delivery; numeric speed applies only to Speech API.
 - Manual voice preview uses unsaved form values and an editable sample of up to 500 characters. It plays privately in the admin page without saving settings, publishing an episode, updating RSS, or uploading to Spotify.
 - Audio Chat requests verbatim narration and checks the returned transcript after normalizing punctuation, whitespace, and case. Missing/changed transcripts or incomplete output stop generation. This check can reject correct spoken renditions such as numbers transcribed as words; it is not independent verification of the actual audio.
@@ -21,6 +22,7 @@ Design accepted by the user on 2026-10-31 and implemented on `jncxm/openai-tts`.
 - `tts-config.ts`: provider defaults and readiness validation.
 - `config.ts`, `types.ts`, `scheduler.ts`: backward-compatible YAML/types/environment settings and forwarding to scheduled processes.
 - `tts-engine.ts`: provider routing, Audio Chat/Speech HTTP contracts, strict transcript checking, and Edge narration.
+- `tts-catalog.ts`: model discovery, sanitized lookup errors, and documented voice suggestions.
 - `tts-text.ts`, `mp3.ts`: bounded text splitting, transcript normalization, MP3 validation, and duration reading.
 - `tts.ts`, `tts-worker.ts`: process isolation, structured errors, staging, cancellation, and atomic publication of output.
 - `admin.ts`, `onboarding.ts`: conditional configuration, masked-key preservation, private previews, and readiness reporting.
@@ -29,7 +31,7 @@ See [ADR 0001](adr/0001-support-separate-openai-audio-contracts.md) for the API-
 
 ## Verification boundary
 
-Verified: `npm run build`; 83 passing tests in 11 files; Playwright checks of provider switching, saved Edge/OpenAI values, both API-mode previews, playback of the local MP3, and a 390-pixel mobile layout without horizontal overflow. FFmpeg decoded a three-chunk MP3 without errors after removing per-file ID3/Xing metadata, and its duration matched the frame-based duration calculation.
+Verified: `npm run build`; 100 passing tests in 12 files; Playwright checks of provider switching, saved Edge/OpenAI values, both API-mode previews, playback of the local MP3, and a 390-pixel mobile layout without horizontal overflow. Model-discovery QA additionally passed 19 browser checks, including custom-name preservation, failed/empty catalogs, stale-request cancellation, voice suggestions, and preserving an existing voice verification when merely refreshing model suggestions. FFmpeg decoded a three-chunk MP3 without errors after removing per-file ID3/Xing metadata, and its duration matched the frame-based duration calculation.
 
 Automated verification uses local mock providers and an offline synthetic MP3. It checks legacy defaults, validation and persistence, secret masking, both API contracts, transcript rejection, lossless long-text splitting, worker cleanup, authenticated previews, and no preview publication. Real OpenAI narration quality, account permissions, and billing require a real-provider check and have not been verified by these tests.
 

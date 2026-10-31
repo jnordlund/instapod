@@ -13,6 +13,10 @@ Select an explicit API mode:
 
 The default base URL is `https://api.openai.com/v1`. Enter a dedicated **TTS API Key**, model, and voice. Model and voice fields accept custom names as well as suggestions. A local service may use an empty key; no Authorization header is sent in that case. TTS does not inherit translation credentials. Secrets are masked in the admin API and stored in the YAML config like existing credentials; they are not encrypted at rest.
 
+**Fetch models** requests `/models` from the current TTS base URL through the authenticated admin server, using the current key (including unsaved settings or a masked saved key). It fills model suggestions without replacing the typed model or saving configuration. Empty lists, missing model-list permissions, and services without `/models` leave manual entry available. Changing the base URL, key, or provider clears the old suggestions and cancels an in-flight lookup.
+
+Model discovery does not verify speech support. The list can include non-audio models; **Test connection & voice** remains the check for a working model/voice combination. Voice suggestions come from OpenAI's documented lists for Audio Chat or Speech API, with the smaller list for `tts-1`/`tts-1-hd`. Suggestions never replace the typed voice; compatible services can use their own names.
+
 Optional voice instructions describe tone and delivery. Speech API services must support the `instructions` parameter when it is supplied. Numeric speed (0.25–4.0, default 1.0) applies only to Speech API. Audio Chat uses voice instructions for delivery. All episodes are MP3, and the selected OpenAI-compatible voice is used across languages.
 
 **Test connection & voice** tests the current form values, including unsaved changes, by generating a sample of up to 500 characters. The status shows Not tested, Checking, Connection and voice verified (green), or Connection test failed (red). A successful check names the tested model/voice and time, and offers the generated audio for playback. It verifies that the selected endpoint can generate audio with those settings, rather than merely accepting a key or listing models.
@@ -62,5 +66,7 @@ Environment overrides take precedence over YAML, including in scheduled pipeline
 | `TTS_OPENAI_SPEED` | `tts.openai.speed` |
 
 ## API references
+
+Model discovery: [List models](https://developers.openai.com/api/reference/resources/models/methods/list). Voice suggestions: [Audio Chat parameters](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create) and [Speech voice options](https://developers.openai.com/api/docs/guides/text-to-speech#voice-options), checked 2026-10-31.
 
 Checked on 2026-10-31: [Audio Chat Completions](https://developers.openai.com/api/docs/guides/audio-chat-completions), [Create speech](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create), and [deprecations](https://developers.openai.com/api/docs/deprecations). OpenAI schedules `tts-1`, `tts-1-hd`, and `gpt-4o-mini-tts` for shutdown on 2027-01-06. `gpt-audio-1.5` uses Audio Chat mode, not Speech API. Compatible services have their own models, voices, parameters, and lifecycle.
