@@ -245,7 +245,9 @@ export function createAdminRouter(
       previewInProgress = true;
       directory = await mkdtemp(join(tmpdir(), "instapod-preview-"));
       const outputPath = join(directory, "preview.mp3");
-      await synthesize(text, outputPath, candidate.tts, { signal: controller.signal, timeoutMs: 120_000 });
+      await synthesize(text, outputPath, candidate.tts, {
+        signal: controller.signal, timeoutMs: candidate.tts.openai?.api_mode === "realtime" ? 300_000 : 120_000,
+      });
       audio = await readFile(outputPath);
     } catch (err) {
       errorMessage = err instanceof ConfigValidationError ? err.issues.join("; ")
@@ -747,6 +749,7 @@ header h1 {
 .tts-model-picker { display: flex; gap: 8px; }
 .tts-model-picker input { flex: 1; min-width: 0; width: 0; }
 .tts-model-picker button { white-space: nowrap; }
+#tts-openai-fields > .form-group { min-width: 0; }
 
 /* Form elements */
 .form-grid {
@@ -1258,9 +1261,10 @@ header h1 {
       <div class="form-grid" id="tts-openai-fields" style="display:none">
         <div class="form-group">
           <label for="cfg-tts-openai-api_mode">API Mode</label>
-          <select id="cfg-tts-openai-api_mode" onchange="updateTtsFields()">
+          <select id="cfg-tts-openai-api_mode" onchange="changeTtsApiMode()">
             <option value="audio-chat">Audio Chat Completions (OpenAI)</option>
             <option value="speech">Speech API (compatible services)</option>
+            <option value="realtime">Realtime (OpenAI / compatible WebSocket)</option>
           </select>
         </div>
         <div class="form-group">
@@ -1278,7 +1282,7 @@ header h1 {
             <input type="text" id="cfg-tts-openai-model" list="tts-model-suggestions" placeholder="gpt-audio-1.5">
             <button type="button" class="btn btn-ghost btn-sm" id="tts-fetch-models-btn" onclick="fetchTtsModels()">Fetch models</button>
           </div>
-          <datalist id="tts-model-suggestions"><option value="gpt-audio-1.5"></datalist>
+          <datalist id="tts-model-suggestions"><option value="gpt-audio-1.5"></option><option value="gpt-realtime-2.1-mini"></option></datalist>
           <div id="tts-models-status" role="status" aria-live="polite" class="form-help">Fetch models from your service, or enter a name.</div>
           <div class="form-help" id="tts-mode-help"></div>
         </div>
@@ -1289,15 +1293,16 @@ header h1 {
           <div class="form-help" id="tts-voice-help">OpenAI voice suggestions. You can also enter your service's own voice name.</div>
         </div>
         <div class="form-group" id="tts-speed-field">
-          <label for="cfg-tts-openai-speed">Speech Speed</label>
+          <label for="cfg-tts-openai-speed">Speaking Speed</label>
           <input type="number" id="cfg-tts-openai-speed" min="0.25" max="4" step="0.05">
+          <div class="form-help" id="tts-speed-help"></div>
         </div>
         <div class="form-group full">
           <label for="cfg-tts-openai-instructions">Voice Instructions (optional)</label>
           <textarea id="cfg-tts-openai-instructions" rows="3" maxlength="4096" placeholder="Read calmly and clearly."></textarea>
           <div class="form-help">Describe delivery and tone. Speech API services must support instructions when provided.</div>
         </div>
-        <div class="form-group full"><div class="form-help" id="tts-transcript-help">Audio Chat checks the returned transcript against the article. Content changes stop generation; punctuation, spacing, and letter case are ignored. Numbers written as words may cause a mismatch.</div></div>
+        <div class="form-group full"><div class="form-help" id="tts-transcript-help">Audio Chat and Realtime check the returned transcript against the article. Content changes stop generation; punctuation, spacing, and letter case are ignored. Numbers written as words may cause a mismatch.</div></div>
       </div>
       <div class="form-grid" style="margin-top:16px">
         <div class="form-group full">
@@ -2000,7 +2005,7 @@ function syncTtsModelsSource() {
   ttsModelsSourceValue = source;
   if (ttsModelsController) ttsModelsController.abort();
   ttsModelsController = null;
-  setTtsSuggestions('tts-model-suggestions', [DEFAULT_OPENAI_TTS.model]);
+  setTtsSuggestions('tts-model-suggestions', [DEFAULT_OPENAI_TTS.model, 'gpt-realtime-2.1-mini']);
   document.getElementById('tts-models-status').textContent = 'Fetch models from your service, or enter a name.';
   const button = document.getElementById('tts-fetch-models-btn');
   button.disabled = false;
@@ -2008,11 +2013,12 @@ function syncTtsModelsSource() {
 }
 
 function updateTtsVoiceSuggestions() {
-  const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
+  const mode = getValue('cfg-tts-openai-api_mode');
+  const speech = mode === 'speech';
   const legacy = speech && ['tts-1', 'tts-1-hd'].includes(getValue('cfg-tts-openai-model').trim());
-  const key = legacy ? 'tts-1' : speech ? 'speech' : 'audio-chat';
+  const key = legacy ? 'tts-1' : mode;
   setTtsSuggestions('tts-voice-suggestions', TTS_VOICE_SUGGESTIONS[key]);
-  document.getElementById('tts-voice-help').textContent = 'Documented OpenAI voices for ' + (legacy ? 'tts-1 / tts-1-hd' : speech ? 'Speech API' : 'Audio Chat') + '. Custom voice names are also allowed; verify them with Test connection & voice.';
+  document.getElementById('tts-voice-help').textContent = 'Documented OpenAI voices for ' + (legacy ? 'tts-1 / tts-1-hd' : speech ? 'Speech API' : mode === 'realtime' ? 'Realtime' : 'Audio Chat') + '. Custom voice names are also allowed; verify them with Test connection & voice.';
 }
 
 async function fetchTtsModels() {
@@ -2077,17 +2083,30 @@ function clearTtsPreview() {
   setTtsCheckStatus('untested', 'Not tested', 'Test the connection and voice for the current settings.');
 }
 
+function changeTtsApiMode() {
+  const mode = getValue('cfg-tts-openai-api_mode');
+  const model = document.getElementById('cfg-tts-openai-model');
+  if (mode === 'realtime' && (!model.value.trim() || model.value === DEFAULT_OPENAI_TTS.model)) model.value = 'gpt-realtime-2.1-mini';
+  if (mode === 'audio-chat' && model.value === 'gpt-realtime-2.1-mini') model.value = DEFAULT_OPENAI_TTS.model;
+  updateTtsFields();
+}
+
 function updateTtsFields() {
   syncTtsModelsSource();
   updateTtsVoiceSuggestions();
   const openai = getValue('cfg-tts-provider') === 'openai';
   const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
+  const realtime = getValue('cfg-tts-openai-api_mode') === 'realtime';
   document.getElementById('tts-edge-fields').style.display = openai ? 'none' : '';
   document.getElementById('tts-openai-fields').style.display = openai ? '' : 'none';
-  document.getElementById('tts-speed-field').style.display = speech ? '' : 'none';
+  document.getElementById('tts-speed-field').style.display = speech || realtime ? '' : 'none';
+  document.getElementById('cfg-tts-openai-speed').max = realtime ? '1.5' : '4';
+  document.getElementById('tts-speed-help').textContent = realtime ? 'Realtime supports 0.25–1.5 (default 1.0).' : 'Speech API supports 0.25–4.0 (default 1.0).';
+  document.getElementById('cfg-tts-openai-model').placeholder = realtime ? 'gpt-realtime-2.1-mini' : speech ? "Your service's speech model" : DEFAULT_OPENAI_TTS.model;
   document.getElementById('tts-transcript-help').style.display = speech ? 'none' : '';
   document.getElementById('tts-mode-help').textContent = speech
     ? 'Enter a speech model supported by your service. gpt-audio-1.5 uses Audio Chat mode. OpenAI Speech models shut down on January 6, 2027.'
+    : realtime ? 'Use gpt-realtime-2.1-mini or a compatible Realtime model. Connects through /realtime using WebSocket; the server needs FFmpeg to produce MP3. One voice is used for all languages.'
     : 'Use an audio-capable chat model, such as gpt-audio-1.5. One voice is used for all languages.';
   clearTtsPreview();
 }

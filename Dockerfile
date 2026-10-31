@@ -15,7 +15,7 @@ FROM node:20-slim
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl unzip \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl unzip ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./

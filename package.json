@@ -18,7 +18,8 @@
         "html-to-text": "^9.0.5",
         "js-yaml": "^4.1.0",
         "node-cron": "^3.0.3",
-        "oauth-1.0a": "^2.2.6"
+        "oauth-1.0a": "^2.2.6",
+        "ws": "^8.22.1"
     },
     "devDependencies": {
         "@types/express": "^4.17.21",
@@ -26,6 +27,7 @@
         "@types/js-yaml": "^4.0.9",
         "@types/node": "^20.14.0",
         "@types/node-cron": "^3.0.11",
+        "@types/ws": "^8.18.2",
         "tsx": "^4.16.0",
         "typescript": "^5.5.0",
         "vitest": "^2.0.0"

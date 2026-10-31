@@ -30,7 +30,7 @@ export interface TtsConfig {
 }
 
 export interface OpenAiTtsConfig {
-    api_mode: "audio-chat" | "speech";
+    api_mode: "audio-chat" | "speech" | "realtime";
     api_base: string;
     api_key: string;
     model: string;

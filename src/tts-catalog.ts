@@ -3,6 +3,7 @@ import type { OpenAiTtsConfig } from "./types.js";
 // OpenAI Docs checked 2026-10-31. Suggestions, not a restriction on compatible services.
 export const TTS_VOICE_SUGGESTIONS = {
     "audio-chat": ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"],
+    realtime: ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"],
     speech: ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse", "marin", "cedar"],
     "tts-1": ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
 };

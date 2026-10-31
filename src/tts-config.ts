@@ -38,8 +38,8 @@ export function getTtsConfigIssues(value: unknown, runnable = true): string[] {
         return [...issues, "tts.openai must be an object"];
     }
     const settings = { ...DEFAULT_OPENAI_TTS, ...(value.openai ?? {}) } as Record<string, unknown>;
-    if (settings.api_mode !== "audio-chat" && settings.api_mode !== "speech") {
-        issues.push("tts.openai.api_mode must be audio-chat or speech");
+    if (!["audio-chat", "speech", "realtime"].includes(settings.api_mode as string)) {
+        issues.push("tts.openai.api_mode must be audio-chat, speech, or realtime");
     }
     for (const key of ["api_base", "api_key", "model", "voice", "instructions"]) {
         if (typeof settings[key] !== "string") {
@@ -59,8 +59,9 @@ export function getTtsConfigIssues(value: unknown, runnable = true): string[] {
     } else if (runnable && provider === "openai") {
         issues.push("tts.openai.api_base is required for OpenAI TTS");
     }
-    if (typeof settings.speed !== "number" || !Number.isFinite(settings.speed) || settings.speed < 0.25 || settings.speed > 4) {
-        issues.push("tts.openai.speed must be a number between 0.25 and 4");
+    const maxSpeed = settings.api_mode === "realtime" ? 1.5 : 4;
+    if (typeof settings.speed !== "number" || !Number.isFinite(settings.speed) || settings.speed < 0.25 || settings.speed > maxSpeed) {
+        issues.push(`tts.openai.speed must be a number between 0.25 and ${maxSpeed}`);
     }
     if (typeof settings.instructions === "string" && settings.instructions.length > 4096) {
         issues.push("tts.openai.instructions must be at most 4096 characters");

@@ -61,12 +61,26 @@ describe("TTS configuration", () => {
         "tts:\n  openai: null\n",
         "tts:\n  openai: []\n",
         "tts:\n  openai:\n    unexpected: true\n",
-        "tts:\n  openai:\n    api_mode: realtime\n",
+        "tts:\n  openai:\n    api_mode: unknown\n",
+        "tts:\n  openai:\n    api_mode: realtime\n    speed: 1.51\n",
         "tts:\n  openai:\n    speed: 4.01\n",
         "tts:\n  openai:\n    api_key: 123\n",
         "tts:\n  openai:\n    api_base: file:///tmp/audio\n",
     ])("rejects malformed nested settings: %s", (yaml) => {
         expect(() => loadConfig(configFile(yaml), { mode: "draft" })).toThrow();
+    });
+    it("loads and persists Realtime through YAML and environment overrides without changing the Edge default", () => {
+        const path = configFile();
+        vi.stubEnv("TTS_OPENAI_API_MODE", "realtime");
+        vi.stubEnv("TTS_OPENAI_MODEL", "gpt-realtime-2.1-mini");
+        vi.stubEnv("TTS_OPENAI_SPEED", "1.5");
+        const config = loadConfig(path);
+        expect(config.tts.provider).toBe("edge-tts");
+        expect(config.tts.openai).toMatchObject({ api_mode: "realtime", model: "gpt-realtime-2.1-mini", speed: 1.5 });
+        saveConfig(config, path);
+        expect(loadConfig(path).tts).toEqual(config.tts);
+        config.tts.openai!.speed = 2;
+        expect(getTtsConfigIssues(config.tts)).toContain("tts.openai.speed must be a number between 0.25 and 1.5");
     });
     it("preserves both providers and masked keys across saves, and permits clearing the local key", () => {
         const config = loadConfig(configFile());
