@@ -172,7 +172,7 @@ describe("Realtime narration", () => {
         const mock = await provider((ws, event) => { startResponse(ws); delta(ws); done(ws, ++calls === 1 ? event.response.input[0].content[0].text : "changed text"); });
         const path = await output();
         await writeFile(path, "old episode");
-        await expect(synthesize("word ".repeat(400), path, { ...baseTts, provider: "openai", openai: mock.config })).rejects.toThrow("differs");
+        await expect(synthesize("word ".repeat(400), path, { ...baseTts, provider: "openai", openai: mock.config })).rejects.toThrow(/TTS realtime chunk 2\/2: .*transcript differs.*first difference at normalized character 1/);
         expect(calls).toBe(2);
         expect(await readFile(path, "utf8")).toBe("old episode");
         expect(await readdir(join(path, ".."))).toEqual(["episode.mp3"]);

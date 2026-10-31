@@ -102,7 +102,12 @@ export async function synthesizeToFile(text: string, outputPath: string, config:
         if (!chunks[i].trim()) continue;
         let audio: Buffer;
         if (resolved.provider === "openai") {
-            audio = await synthesizeOpenAiChunk(chunks[i], resolved.openai, signal);
+            try {
+                audio = await synthesizeOpenAiChunk(chunks[i], resolved.openai, signal);
+            } catch (err) {
+                // The mode and chunk index are sufficient to locate a failure without logging text or credentials.
+                throw new Error(`TTS ${resolved.openai.api_mode} chunk ${i + 1}/${chunks.length}: ${err instanceof Error ? err.message : "Generation failed"}`);
+            }
         } else {
             const chunkPath = `${outputPath}.part${i}`;
             try {

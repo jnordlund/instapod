@@ -34,6 +34,8 @@ Audio Chat and Realtime receive instructions to read the supplied article verbat
 
 Provider errors are reported without including upstream response bodies or credentials. The app does not retry or silently fall back to Edge within a TTS attempt. The normal scheduler can retry an unprocessed article on a later run. Temporary and partial generation files are cleaned up; completed output replaces the target only after the worker succeeds. Existing episodes are not regenerated.
 
+OpenAI-compatible generation errors identify the API mode and text chunk (for example, `TTS realtime chunk 2/8`). Transcript mismatches also report the first differing character position and both text lengths after normalization, without logging either text. A mismatch alone cannot distinguish a content omission from a number or abbreviation written as spoken words. The comparison remains strict; diagnose the returned text before changing that policy. A final pipeline-level "completed" log means the run finished; individual article failures are still reported separately and remain unprocessed for a later retry.
+
 ## YAML and environment variables
 
 See [config.example.yaml](config.example.yaml) for a complete example. TTS configuration has this shape:

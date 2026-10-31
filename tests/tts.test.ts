@@ -65,6 +65,18 @@ describe("narration text", () => {
         expect(() => assertNarrationTranscript("the therapist", "the rapist")).toThrow();
         expect(() => assertNarrationTranscript("10.5", "105")).toThrow();
     });
+    it("reports the first normalized difference and lengths without disclosing either text", () => {
+        let error: Error | undefined;
+        try { assertNarrationTranscript("Alpha beta gamma", "Alpha gamma"); }
+        catch (err) { error = err as Error; }
+        expect(error?.message).toContain("first difference at normalized character 7");
+        expect(error?.message).toContain("expected 16 characters, received 11");
+        expect(error?.message).not.toMatch(/alpha|beta|gamma/i);
+    });
+    it("makes clear that spoken-number differences can also trigger the strict check", () => {
+        expect(() => assertNarrationTranscript("Episode 446", "Episode four hundred forty six"))
+            .toThrow("Numbers or abbreviations written as words can also trigger this check");
+    });
 });
 
 describe("MP3 output", () => {
@@ -180,7 +192,7 @@ describe("TTS providers", () => {
         const previousAudio = await readFile(path);
         inputs.length = 0;
         failing = true;
-        await expect(synthesize(text, path, config)).rejects.toThrow("transcript differs");
+        await expect(synthesize(text, path, config)).rejects.toThrow(/TTS audio-chat chunk 2\/3: .*transcript differs.*first difference at normalized character 1/);
         expect(await readdir(join(path, ".."))).toEqual(["episode.mp3"]);
         expect(await readFile(path)).toEqual(previousAudio);
     }, 15_000);

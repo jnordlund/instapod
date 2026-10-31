@@ -38,7 +38,15 @@ export function assertNarrationTranscript(input: string, transcript: unknown): v
     if (typeof transcript !== "string" || !transcript.trim()) {
         throw new Error("Audio API returned no narration transcript");
     }
-    if (normalizeNarrationText(input) !== normalizeNarrationText(transcript)) {
-        throw new Error("Audio API narration transcript differs from the article; no episode was produced. Try another model or use Edge TTS.");
+    const expected = normalizeNarrationText(input);
+    const received = normalizeNarrationText(transcript);
+    if (expected !== received) {
+        const expectedChars = [...expected];
+        const receivedChars = [...received];
+        let firstDifference = 0;
+        while (firstDifference < Math.min(expectedChars.length, receivedChars.length)
+            && expectedChars[firstDifference] === receivedChars[firstDifference]) firstDifference++;
+        // Report positions and sizes only; article and provider text must stay out of errors/logs.
+        throw new Error(`Audio API narration transcript differs from the article (first difference at normalized character ${firstDifference + 1}; expected ${expectedChars.length} characters, received ${receivedChars.length}); no episode was produced. Numbers or abbreviations written as words can also trigger this check. Try another model or use Edge TTS.`);
     }
 }
