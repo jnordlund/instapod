@@ -22,9 +22,21 @@ export interface TranslationConfig {
 }
 
 export interface TtsConfig {
+    provider?: "edge-tts" | "openai";
     voice: string;
     rate: string;
     pitch: string;
+    openai?: OpenAiTtsConfig;
+}
+
+export interface OpenAiTtsConfig {
+    api_mode: "audio-chat" | "speech";
+    api_base: string;
+    api_key: string;
+    model: string;
+    voice: string;
+    instructions: string;
+    speed: number;
 }
 
 export interface SpotifyUploadConfig {
@@ -84,6 +96,7 @@ export type OnboardingStepId =
     | "admin"
     | "instapaper"
     | "translation"
+    | "tts"
     | "feed"
     | "first_run"
     | "spotify_optional";

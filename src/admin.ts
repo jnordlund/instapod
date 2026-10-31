@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { unlinkSync, existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
@@ -13,6 +15,8 @@ import { addLog, getLogs } from "./logs.js";
 import { InstapaperClient } from "./instapaper.js";
 import { getOnboardingStatus } from "./onboarding.js";
 import { testTranslationConfig } from "./translator.js";
+import { synthesize } from "./tts.js";
+import { DEFAULT_OPENAI_TTS, getTtsConfigIssues } from "./tts-config.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -90,6 +94,9 @@ export function createAdminRouter(
     masked.instapaper.password = maskConfiguredSecret(masked.instapaper.password);
     masked.instapaper.consumer_secret = maskConfiguredSecret(masked.instapaper.consumer_secret);
     masked.translation.api_key = maskConfiguredSecret(masked.translation.api_key);
+    if (masked.tts.openai) {
+      masked.tts.openai.api_key = maskConfiguredSecret(masked.tts.openai.api_key);
+    }
     if (masked.admin) {
       masked.admin.password = maskConfiguredSecret(masked.admin.password);
       delete masked.admin.session_secret;
@@ -190,6 +197,51 @@ export function createAdminRouter(
         ? err.issues.join("; ")
         : (err as Error).message || "Translation test failed";
       res.status(400).json({ ok: false, error: message });
+    }
+  });
+
+  // Preview is private, transient, and independent of pipeline readiness.
+  let previewInProgress = false;
+  router.post("/api/tts/preview", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (previewInProgress) {
+      res.status(409).json({ error: "A voice preview is already running. Please wait." });
+      return;
+    }
+    const text = req.body?.text;
+    if (typeof text !== "string" || !text.trim() || text.length > 500) {
+      res.status(400).json({ error: "Preview text must contain 1-500 characters" });
+      return;
+    }
+    let directory: string | undefined;
+    let audio: Buffer | undefined;
+    let errorMessage: string | undefined;
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.once("close", onClose);
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), { tts: req.body.tts ?? {} });
+      const issues = getTtsConfigIssues(candidate.tts);
+      if (issues.length) throw new ConfigValidationError(issues);
+      previewInProgress = true;
+      directory = await mkdtemp(join(tmpdir(), "instapod-preview-"));
+      const outputPath = join(directory, "preview.mp3");
+      await synthesize(text, outputPath, candidate.tts, { signal: controller.signal, timeoutMs: 120_000 });
+      audio = await readFile(outputPath);
+    } catch (err) {
+      errorMessage = err instanceof ConfigValidationError ? err.issues.join("; ")
+        : err instanceof Error ? err.message : "Voice preview failed";
+    } finally {
+      try {
+        if (directory) await rm(directory, { recursive: true, force: true });
+      } finally {
+        res.off("close", onClose);
+        previewInProgress = false;
+      }
+    }
+    if (!controller.signal.aborted) {
+      if (errorMessage) res.status(400).json({ error: errorMessage });
+      else res.type("audio/mpeg").send(audio);
     }
   });
 
@@ -386,6 +438,9 @@ export function mergeConfigUpdate(
   if (typedUpdates.translation?.api_key === "••••••••") {
     merged.translation.api_key = current.translation.api_key;
   }
+  if (typedUpdates.tts?.openai?.api_key === "••••••••" && merged.tts.openai) {
+    merged.tts.openai.api_key = current.tts.openai?.api_key ?? "";
+  }
   // Preserve admin secrets
   if (merged.admin) {
     if (typedUpdates.admin?.password === "••••••••") {
@@ -427,6 +482,7 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
 // ── HTML Template ──
 
 function renderAdminPage(): string {
+  const defaultOpenAiTtsJs = JSON.stringify(DEFAULT_OPENAI_TTS);
   const defaultTitlePromptJs = JSON.stringify(DEFAULT_TITLE_PROMPT_TEMPLATE);
   const defaultTextPromptJs = JSON.stringify(DEFAULT_TEXT_PROMPT_TEMPLATE);
 
@@ -1136,20 +1192,85 @@ header h1 {
     </div>
 
     <!-- TTS -->
-    <div class="card">
+    <div class="card" id="tts-settings">
       <h2><span class="icon">🗣️</span> Text-to-Speech</h2>
       <div class="form-grid">
         <div class="form-group">
-          <label>Voice</label>
+          <label for="cfg-tts-provider">Provider</label>
+          <select id="cfg-tts-provider" onchange="updateTtsFields()">
+            <option value="edge-tts">Edge TTS (default)</option>
+            <option value="openai">OpenAI / compatible</option>
+          </select>
+        </div>
+        <div class="form-group full"><div class="form-help">Changes apply from the next run. Existing episodes keep their audio. Voices are AI-generated.</div></div>
+      </div>
+      <div class="form-grid" id="tts-edge-fields">
+        <div class="form-group">
+          <label for="cfg-tts-voice">Edge Voice</label>
           <input type="text" id="cfg-tts-voice" placeholder="sv-SE-SofieNeural">
         </div>
         <div class="form-group">
-          <label>Rate</label>
+          <label for="cfg-tts-rate">Rate</label>
           <input type="text" id="cfg-tts-rate" placeholder="+0%">
         </div>
         <div class="form-group">
-          <label>Pitch</label>
+          <label for="cfg-tts-pitch">Pitch</label>
           <input type="text" id="cfg-tts-pitch" placeholder="+0Hz">
+        </div>
+      </div>
+      <div class="form-grid" id="tts-openai-fields" style="display:none">
+        <div class="form-group">
+          <label for="cfg-tts-openai-api_mode">API Mode</label>
+          <select id="cfg-tts-openai-api_mode" onchange="updateTtsFields()">
+            <option value="audio-chat">Audio Chat Completions (OpenAI)</option>
+            <option value="speech">Speech API (compatible services)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-api_base">TTS API Base URL</label>
+          <input type="url" id="cfg-tts-openai-api_base" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="form-group full">
+          <label for="cfg-tts-openai-api_key">TTS API Key</label>
+          <input type="password" id="cfg-tts-openai-api_key" autocomplete="off">
+          <div class="form-help">Separate from translation. Leave empty for local services that do not require authentication.</div>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-model">TTS Model</label>
+          <input type="text" id="cfg-tts-openai-model" list="tts-model-suggestions" placeholder="gpt-audio-1.5">
+          <datalist id="tts-model-suggestions"><option value="gpt-audio-1.5"></datalist>
+          <div class="form-help" id="tts-mode-help"></div>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-voice">TTS Voice</label>
+          <input type="text" id="cfg-tts-openai-voice" list="tts-voice-suggestions" placeholder="alloy">
+          <datalist id="tts-voice-suggestions">
+            <option value="alloy"><option value="ash"><option value="ballad"><option value="coral"><option value="echo">
+            <option value="sage"><option value="shimmer"><option value="verse"><option value="marin"><option value="cedar">
+          </datalist>
+          <div class="form-help">You can enter your service's own model and voice names.</div>
+        </div>
+        <div class="form-group" id="tts-speed-field">
+          <label for="cfg-tts-openai-speed">Speech Speed</label>
+          <input type="number" id="cfg-tts-openai-speed" min="0.25" max="4" step="0.05">
+        </div>
+        <div class="form-group full">
+          <label for="cfg-tts-openai-instructions">Voice Instructions (optional)</label>
+          <textarea id="cfg-tts-openai-instructions" rows="3" maxlength="4096" placeholder="Read calmly and clearly."></textarea>
+          <div class="form-help">Describe delivery and tone. Speech API services must support instructions when provided.</div>
+        </div>
+        <div class="form-group full"><div class="form-help" id="tts-transcript-help">Audio Chat checks the returned transcript against the article. Content changes stop generation; punctuation, spacing, and letter case are ignored. Numbers written as words may cause a mismatch.</div></div>
+      </div>
+      <div class="form-grid" style="margin-top:16px">
+        <div class="form-group full">
+          <label for="tts-preview-text">Voice Preview Text</label>
+          <textarea id="tts-preview-text" rows="2" maxlength="500">Det här är ett röstprov från Instapod.</textarea>
+          <div class="form-help">Uses the current form values, including unsaved changes. API usage may be billed. No episode is created.</div>
+        </div>
+        <div class="form-group full">
+          <button type="button" class="btn btn-ghost btn-sm" id="tts-preview-btn" onclick="previewTts()">Generate voice preview</button>
+          <div id="tts-preview-status" role="status" aria-live="polite" class="form-help"></div>
+          <audio id="tts-preview-audio" controls style="display:none;width:100%;margin-top:8px" aria-label="Generated voice preview"></audio>
         </div>
       </div>
     </div>
@@ -1815,6 +1936,88 @@ async function cancelSpotifyAuth() {
 }
 
 // ── Config form ──
+const DEFAULT_OPENAI_TTS = ${defaultOpenAiTtsJs};
+let ttsPreviewUrl = null;
+let ttsPreviewController = null;
+
+function clearTtsPreview() {
+  if (ttsPreviewController) ttsPreviewController.abort();
+  ttsPreviewController = null;
+  const audio = document.getElementById('tts-preview-audio');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.style.display = 'none';
+  if (ttsPreviewUrl) URL.revokeObjectURL(ttsPreviewUrl);
+  ttsPreviewUrl = null;
+  document.getElementById('tts-preview-status').textContent = '';
+}
+
+function updateTtsFields() {
+  const openai = getValue('cfg-tts-provider') === 'openai';
+  const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
+  document.getElementById('tts-edge-fields').style.display = openai ? 'none' : '';
+  document.getElementById('tts-openai-fields').style.display = openai ? '' : 'none';
+  document.getElementById('tts-speed-field').style.display = speech ? '' : 'none';
+  document.getElementById('tts-transcript-help').style.display = speech ? 'none' : '';
+  document.getElementById('tts-mode-help').textContent = speech
+    ? 'Enter a speech model supported by your service. gpt-audio-1.5 uses Audio Chat mode. OpenAI Speech models shut down on January 6, 2027.'
+    : 'Use an audio-capable chat model, such as gpt-audio-1.5. One voice is used for all languages.';
+  clearTtsPreview();
+}
+
+function getTtsFormConfig() {
+  return {
+    provider: getValue('cfg-tts-provider'),
+    voice: getValue('cfg-tts-voice'),
+    rate: getValue('cfg-tts-rate'),
+    pitch: getValue('cfg-tts-pitch'),
+    openai: {
+      api_mode: getValue('cfg-tts-openai-api_mode'),
+      api_base: getValue('cfg-tts-openai-api_base').trim(),
+      api_key: getValue('cfg-tts-openai-api_key').trim(),
+      model: getValue('cfg-tts-openai-model').trim(),
+      voice: getValue('cfg-tts-openai-voice').trim(),
+      instructions: getValue('cfg-tts-openai-instructions'),
+      speed: Number(getValue('cfg-tts-openai-speed')),
+    },
+  };
+}
+
+async function previewTts() {
+  const btn = document.getElementById('tts-preview-btn');
+  const status = document.getElementById('tts-preview-status');
+  clearTtsPreview();
+  btn.disabled = true;
+  const controller = new AbortController();
+  ttsPreviewController = controller;
+  status.textContent = 'Generating voice preview...';
+  try {
+    const r = await apiFetch('/api/tts/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ text: getValue('tts-preview-text'), tts: getTtsFormConfig() }),
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || 'Voice preview failed');
+    }
+    const blob = await r.blob();
+    if (controller.signal.aborted) return;
+    ttsPreviewUrl = URL.createObjectURL(blob);
+    const audio = document.getElementById('tts-preview-audio');
+    audio.src = ttsPreviewUrl;
+    audio.style.display = '';
+    status.textContent = 'Voice preview ready. Press play to listen.';
+  } catch (e) {
+    if (!controller.signal.aborted) status.textContent = e.message || 'Voice preview failed';
+  } finally {
+    if (ttsPreviewController === controller) ttsPreviewController = null;
+    btn.disabled = false;
+  }
+}
+
+document.getElementById('tts-settings').addEventListener('input', clearTtsPreview);
+
 async function loadConfig() {
   try {
     const r = await apiFetch('/api/config');
@@ -1972,6 +2175,10 @@ function populateForm(c) {
   setValue('cfg-tts-voice', c.tts?.voice);
   setValue('cfg-tts-rate', c.tts?.rate);
   setValue('cfg-tts-pitch', c.tts?.pitch);
+  setValue('cfg-tts-provider', c.tts?.provider ?? 'edge-tts');
+  const openaiTts = { ...DEFAULT_OPENAI_TTS, ...c.tts?.openai };
+  for (const [key, value] of Object.entries(openaiTts)) setValue('cfg-tts-openai-' + key, value);
+  updateTtsFields();
   setChecked('cfg-spotify-enabled', c.spotify_upload?.enabled);
   setValue('cfg-spotify-cli_path', c.spotify_upload?.cli_path);
   setValue('cfg-spotify-language', c.spotify_upload?.language);
@@ -2196,11 +2403,7 @@ async function saveConfigForm() {
       title_prompt: getValue('cfg-translation-title_prompt'),
       text_prompt: getValue('cfg-translation-text_prompt'),
     },
-    tts: {
-      voice: getValue('cfg-tts-voice'),
-      rate: getValue('cfg-tts-rate'),
-      pitch: getValue('cfg-tts-pitch'),
-    },
+    tts: getTtsFormConfig(),
     spotify_upload: {
       enabled: getChecked('cfg-spotify-enabled'),
       cli_path: getValue('cfg-spotify-cli_path') || 'save-to-spotify',

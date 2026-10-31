@@ -1,0 +1,64 @@
+# Text-to-speech configuration
+
+Choose **Configuration → Text-to-Speech → Provider**. Edge TTS remains the default, including for older config files. Edge voice, rate, and pitch are preserved when selecting OpenAI / compatible. Changes apply from the next pipeline run; existing episodes keep their audio.
+
+## OpenAI / compatible
+
+Select an explicit API mode:
+
+| Mode | Use | Model example |
+| --- | --- | --- |
+| Audio Chat Completions | Current OpenAI audio generation, or a compatible audio-capable chat service | `gpt-audio-1.5` |
+| Speech API | Services implementing `/audio/speech` | Your service's speech model |
+
+The default base URL is `https://api.openai.com/v1`. Enter a dedicated **TTS API Key**, model, and voice. Model and voice fields accept custom names as well as suggestions. A local service may use an empty key; no Authorization header is sent in that case. TTS does not inherit translation credentials. Secrets are masked in the admin API and stored in the YAML config like existing credentials; they are not encrypted at rest.
+
+Optional voice instructions describe tone and delivery. Speech API services must support the `instructions` parameter when it is supplied. Numeric speed (0.25–4.0, default 1.0) applies only to Speech API. Audio Chat uses voice instructions for delivery. All episodes are MP3, and the selected OpenAI-compatible voice is used across languages.
+
+**Generate voice preview** uses the current form values, including unsaved changes, and a sample of up to 500 characters. Press play in the embedded player when it is ready. Preview audio is temporary: it does not save config, create an episode, update RSS, or upload to Spotify. Generation only happens after clicking the button and may incur API usage charges. Editing the settings cancels an in-flight preview and clears stale audio.
+
+## Narration checks and failures
+
+Audio Chat receives instructions to read the supplied article verbatim. Its returned transcript must match the source after normalizing whitespace, punctuation, and case. A missing transcript, changed content, incomplete response, or invalid MP3 stops generation. This conservative check may reject correct spoken numbers transcribed as words; a matching transcript is not independent verification of the actual audio. Speech API returns audio without a transcript, so this text comparison does not apply to it.
+
+Provider errors are reported without including upstream response bodies or credentials. The app does not retry or silently fall back to Edge within a TTS attempt. The normal scheduler can retry an unprocessed article on a later run. Temporary and partial generation files are cleaned up; completed output replaces the target only after the worker succeeds. Existing episodes are not regenerated.
+
+## YAML and environment variables
+
+See [config.example.yaml](config.example.yaml) for a complete example. TTS configuration has this shape:
+
+```yaml
+tts:
+  provider: edge-tts
+  voice: sv-SE-SofieNeural
+  rate: "+0%"
+  pitch: "+0Hz"
+  openai:
+    api_mode: audio-chat
+    api_base: https://api.openai.com/v1
+    api_key: ""
+    model: gpt-audio-1.5
+    voice: alloy
+    instructions: ""
+    speed: 1
+```
+
+Environment overrides take precedence over YAML, including in scheduled pipeline workers:
+
+| Environment variable | YAML setting |
+| --- | --- |
+| `TTS_PROVIDER` | `tts.provider` |
+| `TTS_VOICE` | `tts.voice` (Edge) |
+| `TTS_RATE` | `tts.rate` (Edge) |
+| `TTS_PITCH` | `tts.pitch` (Edge) |
+| `TTS_OPENAI_API_MODE` | `tts.openai.api_mode` |
+| `TTS_OPENAI_API_BASE` | `tts.openai.api_base` |
+| `TTS_OPENAI_API_KEY` | `tts.openai.api_key` |
+| `TTS_OPENAI_MODEL` | `tts.openai.model` |
+| `TTS_OPENAI_VOICE` | `tts.openai.voice` |
+| `TTS_OPENAI_INSTRUCTIONS` | `tts.openai.instructions` |
+| `TTS_OPENAI_SPEED` | `tts.openai.speed` |
+
+## API references
+
+Checked on 2026-10-31: [Audio Chat Completions](https://developers.openai.com/api/docs/guides/audio-chat-completions), [Create speech](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create), and [deprecations](https://developers.openai.com/api/docs/deprecations). OpenAI schedules `tts-1`, `tts-1-hd`, and `gpt-4o-mini-tts` for shutdown on 2027-01-06. `gpt-audio-1.5` uses Audio Chat mode, not Speech API. Compatible services have their own models, voices, parameters, and lifecycle.

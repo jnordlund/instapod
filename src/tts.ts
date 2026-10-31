@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdirSync } from "node:fs";
+import { mkdtemp, rename, rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { TtsConfig } from "./types.js";
 import { resolveNodeScriptCommand } from "./node-script.js";
@@ -8,60 +9,70 @@ import { resolveNodeScriptCommand } from "./node-script.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /**
- * Synthesize text to an mp3 file using edge-tts in a child process.
+ * Synthesize text to an MP3 file with the selected provider in a child process.
  * This prevents TTS from blocking the main event loop (Express).
  * Returns the duration in seconds.
  */
 export async function synthesize(
     text: string,
     outputPath: string,
-    config: TtsConfig
+    config: TtsConfig,
+    options: { signal?: AbortSignal; timeoutMs?: number } = {}
 ): Promise<number> {
     mkdirSync(dirname(outputPath), { recursive: true });
 
     const { command, args } = resolveNodeScriptCommand(__dirname, "tts-worker.js");
 
-    return new Promise<number>((resolve, reject) => {
-        const child = spawn(command, args, {
-            stdio: ["pipe", "pipe", "inherit"],
+    const stagingDir = await mkdtemp(join(dirname(outputPath), ".tts-"));
+    const stagedOutput = join(stagingDir, "episode.mp3");
+    try {
+        const duration = await new Promise<number>((resolve, reject) => {
+            const child = spawn(command, args, {
+                stdio: ["pipe", "pipe", "inherit"],
+                signal: options.signal,
+                timeout: options.timeoutMs ?? 30 * 60_000,
+            });
+
+            let stdout = "";
+
+            child.stdout!.on("data", (data: Buffer) => {
+                stdout += data.toString();
+            });
+
+            let workerError: string | undefined;
+            child.on("error", (err) => {
+                workerError = err.name === "AbortError" ? "TTS preview cancelled" : "Could not start the TTS worker";
+            });
+
+            child.on("close", (code, signal) => {
+                try {
+                    const result = JSON.parse(stdout);
+                    if (result.error) { reject(new Error(result.error)); return; }
+                    if (workerError || code !== 0 || !Number.isFinite(result.duration) || result.duration <= 0) {
+                        reject(new Error(workerError ?? `TTS worker stopped (${signal ?? code})`));
+                        return;
+                    }
+                    resolve(result.duration);
+                } catch {
+                    reject(new Error(workerError ?? (signal ? "TTS worker timed out or was stopped" : "TTS worker returned invalid output")));
+                }
+            });
+
+            // Send input via stdin
+            const input = JSON.stringify({
+                text,
+                outputPath: stagedOutput,
+                config,
+            });
+            child.stdin!.on("error", () => { workerError ??= "TTS worker input failed"; });
+            child.stdin!.write(input);
+            child.stdin!.end();
         });
-
-        let stdout = "";
-
-        child.stdout!.on("data", (data: Buffer) => {
-            stdout += data.toString();
-        });
-
-        child.on("error", (err) => {
-            reject(new Error(`TTS worker error: ${err.message}`));
-        });
-
-        child.on("close", (code) => {
-            if (code !== 0) {
-                reject(new Error(`TTS worker exited with code ${code}`));
-                return;
-            }
-
-            try {
-                const result = JSON.parse(stdout);
-                const estimatedDuration = Math.round(result.size / 16000);
-                resolve(estimatedDuration);
-            } catch {
-                reject(new Error(`TTS worker returned invalid output: ${stdout}`));
-            }
-        });
-
-        // Send input via stdin
-        const input = JSON.stringify({
-            text,
-            outputPath,
-            voice: config.voice,
-            rate: config.rate,
-            pitch: config.pitch,
-        });
-        child.stdin!.write(input);
-        child.stdin!.end();
-    });
+        await rename(stagedOutput, outputPath);
+        return duration;
+    } finally {
+        await rm(stagingDir, { recursive: true, force: true });
+    }
 }
 
 /**

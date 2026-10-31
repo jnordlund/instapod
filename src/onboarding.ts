@@ -6,6 +6,7 @@ import type {
     OnboardingStepStatus,
 } from "./types.js";
 import { getFeedUrl } from "./feed-access.js";
+import { getTtsConfigIssues } from "./tts-config.js";
 
 interface OnboardingStateSnapshot {
     episodeCount: number;
@@ -73,6 +74,7 @@ export function getOnboardingStatus(
         config.feed.author,
     ]);
     const firstRunComplete = Boolean(state.lastRun) || state.episodeCount > 0;
+    const ttsReady = getTtsConfigIssues(config.tts).length === 0;
 
     const steps: OnboardingStep[] = [
         step(
@@ -104,6 +106,16 @@ export function getOnboardingStatus(
                 ? "Translation API settings are present."
                 : "Add an OpenAI-compatible API base, API key, model, and target language.",
             "Add translation settings"
+        ),
+        step(
+            "tts",
+            "Configure narration",
+            ttsReady ? "complete" : "missing",
+            true,
+            !ttsReady
+                ? "Complete the selected TTS provider in Configuration before running."
+                : config.tts.provider === "openai" ? "OpenAI-compatible narration is configured." : "Edge TTS narration is ready.",
+            "Open Configuration"
         ),
         step(
             "feed",
