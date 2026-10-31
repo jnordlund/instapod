@@ -28,13 +28,13 @@ Realtime requires `ffmpeg` on the server's PATH. It is included in the Docker im
 
 The result applies to the last explicit test in the current page, not ongoing service availability. Editing the settings cancels an in-flight test and clears the verification and stale audio; loading or saving configuration also resets the result. Preview audio is temporary: it does not save config, create an episode, update RSS, or upload to Spotify. Generation only happens after clicking the button and may incur API usage charges.
 
-## Narration checks and failures
+## Narration and generation failures
 
-Audio Chat and Realtime receive instructions to read the supplied article verbatim. Their returned transcript must match the source after normalizing whitespace, punctuation, and case. A missing transcript, changed content, incomplete response, or invalid audio stops generation. Realtime uses fresh sessions for chunks of at most 1,500 characters; Audio Chat and Speech use chunks of at most 4,000 characters. Splitting preserves the full text. This conservative check may reject correct spoken numbers transcribed as words; a matching transcript is not independent verification of the actual audio. Speech API returns audio without a transcript, so this text comparison does not apply to it.
+Audio Chat and Realtime are instructed to narrate the full supplied article in its original language while preserving its meaning. The model controls natural spoken delivery, including pronunciation, numbers, abbreviations, and pauses. Instapod does not compare the returned transcript with the article or require a transcript. Differences in wording therefore do not stop generation, and Instapod does not independently verify narration fidelity. All modes still require a successful, completed response with valid audio. Realtime uses fresh sessions for chunks of at most 1,500 characters; Audio Chat and Speech use chunks of at most 4,000 characters. Splitting preserves the full input text.
 
 Provider errors are reported without including upstream response bodies or credentials. The app does not retry or silently fall back to Edge within a TTS attempt. The normal scheduler can retry an unprocessed article on a later run. Temporary and partial generation files are cleaned up; completed output replaces the target only after the worker succeeds. Existing episodes are not regenerated.
 
-OpenAI-compatible generation errors identify the API mode and text chunk (for example, `TTS realtime chunk 2/8`). Transcript mismatches also report the first differing character position and both text lengths after normalization, without logging either text. A mismatch alone cannot distinguish a content omission from a number or abbreviation written as spoken words. The comparison remains strict; diagnose the returned text before changing that policy. A final pipeline-level "completed" log means the run finished; individual article failures are still reported separately and remain unprocessed for a later retry.
+OpenAI-compatible generation errors identify the API mode and text chunk (for example, `TTS realtime chunk 2/8`). A final pipeline-level "completed" log means the run finished; individual article failures are still reported separately and remain unprocessed for a later retry.
 
 ## YAML and environment variables
 

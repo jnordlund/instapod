@@ -99,7 +99,7 @@ describe("voice preview admin API", () => {
         provider.use(express.json());
         provider.post("/v1/chat/completions", (req, res) => {
             calls.push({ path: req.path, authorization: req.get("authorization"), body: req.body });
-            res.json({ choices: [{ finish_reason: "stop", message: { audio: { data: TEST_MP3.toString("base64"), transcript: req.body.messages[1].content } } }] });
+            res.json({ choices: [{ finish_reason: "stop", message: { audio: { data: TEST_MP3.toString("base64"), transcript: "The voice provider chooses a natural rendition." } } }] });
         });
         const providerBase = await listen(provider);
         const before = readFileSync(admin.path, "utf-8");

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import express from "express";
 import type { Server } from "node:http";
 import { DEFAULT_OPENAI_TTS } from "../src/tts-config.js";
-import { assertNarrationTranscript, splitTextForTts } from "../src/tts-text.js";
+import { splitTextForTts } from "../src/tts-text.js";
 import { synthesizeOpenAiChunk, synthesizeToFile } from "../src/tts-engine.js";
 import { synthesize } from "../src/tts.js";
 import { mp3AudioFrames, mp3Duration } from "../src/mp3.js";
@@ -40,7 +40,7 @@ async function output() {
 }
 
 const baseTts = { voice: "sv-SE-SofieNeural", rate: "+0%", pitch: "+0Hz" };
-function chatResponse(transcript: string, finishReason = "stop") {
+function chatResponse(transcript: unknown, finishReason = "stop") {
     return { choices: [{ finish_reason: finishReason, message: { audio: { data: TEST_MP3.toString("base64"), transcript } } }] };
 }
 
@@ -56,26 +56,6 @@ describe("narration text", () => {
         expect(chunks.join("")).toBe(text);
         expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= 4000)).toBe(true);
         expect(chunks.every((chunk) => !/[\uD800-\uDBFF]$/.test(chunk))).toBe(true);
-    });
-    it("allows punctuation/case/spacing differences but rejects omissions, additions, numbers, and missing transcripts", () => {
-        expect(() => assertNarrationTranscript("Hej, VÄRLDEN!", "hej världen")).not.toThrow();
-        for (const transcript of ["Hej", "Hej världen igen", "Hej 2 världen", undefined]) {
-            expect(() => assertNarrationTranscript("Hej världen", transcript)).toThrow();
-        }
-        expect(() => assertNarrationTranscript("the therapist", "the rapist")).toThrow();
-        expect(() => assertNarrationTranscript("10.5", "105")).toThrow();
-    });
-    it("reports the first normalized difference and lengths without disclosing either text", () => {
-        let error: Error | undefined;
-        try { assertNarrationTranscript("Alpha beta gamma", "Alpha gamma"); }
-        catch (err) { error = err as Error; }
-        expect(error?.message).toContain("first difference at normalized character 7");
-        expect(error?.message).toContain("expected 16 characters, received 11");
-        expect(error?.message).not.toMatch(/alpha|beta|gamma/i);
-    });
-    it("makes clear that spoken-number differences can also trigger the strict check", () => {
-        expect(() => assertNarrationTranscript("Episode 446", "Episode four hundred forty six"))
-            .toThrow("Numbers or abbreviations written as words can also trigger this check");
     });
 });
 
@@ -113,7 +93,8 @@ describe("TTS providers", () => {
         const body = JSON.parse(request.body);
         expect(body.audio).toEqual({ voice: "alloy", format: "mp3" });
         expect(body.modalities).toEqual(["text", "audio"]);
-        expect(body.messages[0].content).toContain("verbatim");
+        expect(body.messages[0].content).toContain("natural spoken delivery");
+        expect(body.messages[0].content).toContain("Do not summarize");
         expect(body.messages[0].content).toContain("Speak calmly");
         expect(body.messages[1].content).toBe("Hej världen!");
         expect(body).not.toHaveProperty("speed");
@@ -129,9 +110,9 @@ describe("TTS providers", () => {
         expect(JSON.parse(request.body)).toEqual({ model: "local-tts", voice: "local-voice", input: "Hello", response_format: "mp3", speed: 1.25 });
     });
 
-    it.each(["changed text", "", undefined])("rejects differing or absent narration transcripts", async (transcript) => {
-        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(chatResponse(transcript!)))));
-        await expect(synthesizeOpenAiChunk("Original text", DEFAULT_OPENAI_TTS)).rejects.toThrow(/transcript/);
+    it.each(["Beläggen. Onödigt krängel.", "", undefined, null])("accepts valid Audio Chat audio regardless of its transcript: %s", async (transcript) => {
+        vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(chatResponse(transcript)))));
+        expect(await synthesizeOpenAiChunk("Belägg. Onödigt krångel.", DEFAULT_OPENAI_TTS)).toEqual(TEST_MP3);
     });
 
     it("rejects incomplete generations, malformed JSON, and invalid audio", async () => {
@@ -174,7 +155,9 @@ describe("TTS providers", () => {
         app.post("/v1/chat/completions", (req, res) => {
             const text = req.body.messages[1].content;
             inputs.push(text);
-            res.json(chatResponse(failing && inputs.length > 1 ? "omitted text" : text));
+            const result = chatResponse("The model chooses its own spoken delivery.");
+            if (failing && inputs.length > 1) result.choices[0].message.audio.data = Buffer.from("invalid MP3").toString("base64");
+            res.json(result);
         });
         const server = app.listen(0, "127.0.0.1");
         servers.push(server);
@@ -192,7 +175,7 @@ describe("TTS providers", () => {
         const previousAudio = await readFile(path);
         inputs.length = 0;
         failing = true;
-        await expect(synthesize(text, path, config)).rejects.toThrow(/TTS audio-chat chunk 2\/3: .*transcript differs.*first difference at normalized character 1/);
+        await expect(synthesize(text, path, config)).rejects.toThrow(/TTS audio-chat chunk 2\/3: .*valid MP3/);
         expect(await readdir(join(path, ".."))).toEqual(["episode.mp3"]);
         expect(await readFile(path)).toEqual(previousAudio);
     }, 15_000);

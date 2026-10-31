@@ -1,6 +1,6 @@
 import WebSocket from "ws";
 import type { OpenAiTtsConfig } from "./types.js";
-import { assertNarrationTranscript, narrationInstructions } from "./tts-text.js";
+import { narrationInstructions } from "./tts-text.js";
 
 function realtimeError(status?: number): Error {
     const hint = status === 401 ? "Check the TTS API key."
@@ -100,24 +100,20 @@ export async function requestRealtimeAudio(
                         throw new Error("Realtime TTS did not finish the narration; no episode was produced. Try shorter text or another model.");
                     }
                     const ordered: Buffer[] = [];
-                    const transcripts: string[] = [];
                     for (const item of response.output ?? []) {
                         if (item.type !== "message" || item.role !== "assistant") continue;
                         for (const [index, part] of (item.content ?? []).entries()) {
                             if (part.type !== "output_audio") throw new Error("Realtime TTS returned a non-audio narration");
                             const key = JSON.stringify([item.id, index]);
                             const chunks = audio.get(key);
-                            if (!chunks?.length) throw new Error("Realtime TTS returned no audio for its transcript");
+                            if (!chunks?.length) throw new Error("Realtime TTS returned no audio for an output part");
                             const bytes = Buffer.concat(chunks);
                             if (!bytes.length || bytes.length % 2) throw new Error("Realtime TTS returned invalid PCM audio");
-                            if (typeof part.transcript !== "string" || !part.transcript.trim()) throw new Error("Realtime TTS returned no narration transcript");
                             ordered.push(bytes);
-                            transcripts.push(part.transcript);
                             audio.delete(key);
                         }
                     }
                     if (!ordered.length || audio.size) throw new Error("Realtime TTS returned incomplete audio");
-                    assertNarrationTranscript(text, transcripts.join(" "));
                     finish(undefined, Buffer.concat(ordered));
                 }
             } catch (err) {

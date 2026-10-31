@@ -95,7 +95,8 @@ describe("Realtime narration", () => {
         expect(mock.sessions[0]).toMatchObject({ type: "realtime", output_modalities: ["audio"], tools: [], audio: {
             input: { turn_detection: null }, output: { format: { type: "audio/pcm", rate: 24000 }, voice: "cedar", speed: 1.25 },
         } });
-        expect(mock.sessions[0].instructions).toContain("verbatim");
+        expect(mock.sessions[0].instructions).toContain("natural spoken delivery");
+        expect(mock.sessions[0].instructions).toContain("Do not summarize");
         expect(mock.sessions[0].instructions).toContain("Read calmly");
         expect(mock.responses[0]).toEqual({ conversation: "none", output_modalities: ["audio"], input: [{ type: "message", role: "user", content: [{ type: "input_text", text }] }] });
     });
@@ -106,9 +107,9 @@ describe("Realtime narration", () => {
         expect(mock.responses).toHaveLength(0);
     });
 
-    it.each(["changed text", undefined, ""])(("rejects a changed or missing transcript: %s"), async transcript => {
+    it.each(["Beläggen. Onödigt krängel.", undefined, "", null])("accepts valid Realtime audio regardless of its transcript: %s", async transcript => {
         const mock = await provider(ws => { startResponse(ws); delta(ws); done(ws, transcript); });
-        await expect(requestRealtimeAudio("Original text", mock.config)).rejects.toThrow(/transcript/);
+        expect(await requestRealtimeAudio("Belägg. Onödigt krångel.", mock.config)).toEqual(PCM);
     });
 
     it.each(["incomplete", "failed", "cancelled"])("rejects %s responses even when audio and transcript were delivered", async status => {
@@ -154,7 +155,8 @@ describe("Realtime narration", () => {
     });
 
     it("encodes and joins long narration through the actual worker, keeping all source text and omitting empty local auth", async () => {
-        const mock = await provider();
+        let calls = 0;
+        const mock = await provider(ws => { startResponse(ws); delta(ws); done(ws, calls++ % 2 ? undefined : "The model chooses its own spoken delivery."); });
         const path = await output();
         const text = "En längre artikel utan punkt med alla ord kvar ".repeat(80);
         const duration = await synthesize(text, path, { ...baseTts, provider: "openai", openai: mock.config });
@@ -169,10 +171,10 @@ describe("Realtime narration", () => {
 
     it("preserves existing output and cleans staging files if a later chunk fails", async () => {
         let calls = 0;
-        const mock = await provider((ws, event) => { startResponse(ws); delta(ws); done(ws, ++calls === 1 ? event.response.input[0].content[0].text : "changed text"); });
+        const mock = await provider(ws => { startResponse(ws); delta(ws); done(ws, undefined, ++calls === 1 ? "completed" : "incomplete"); });
         const path = await output();
         await writeFile(path, "old episode");
-        await expect(synthesize("word ".repeat(400), path, { ...baseTts, provider: "openai", openai: mock.config })).rejects.toThrow(/TTS realtime chunk 2\/2: .*transcript differs.*first difference at normalized character 1/);
+        await expect(synthesize("word ".repeat(400), path, { ...baseTts, provider: "openai", openai: mock.config })).rejects.toThrow(/TTS realtime chunk 2\/2: .*did not finish/);
         expect(calls).toBe(2);
         expect(await readFile(path, "utf8")).toBe("old episode");
         expect(await readdir(join(path, ".."))).toEqual(["episode.mp3"]);

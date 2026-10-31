@@ -2,7 +2,7 @@ import { EdgeTTS } from "@andresaya/edge-tts";
 import { appendFile, readFile, unlink, writeFile } from "node:fs/promises";
 import type { OpenAiTtsConfig, TtsConfig } from "./types.js";
 import { getTtsConfigIssues, resolveTtsConfig } from "./tts-config.js";
-import { assertNarrationTranscript, narrationInstructions, splitTextForTts } from "./tts-text.js";
+import { narrationInstructions, splitTextForTts } from "./tts-text.js";
 import { mp3AudioFrames, mp3Duration } from "./mp3.js";
 import { requestRealtimeAudio } from "./tts-realtime.js";
 import { encodeRealtimeMp3, ensureFfmpegAvailable } from "./tts-ffmpeg.js";
@@ -64,14 +64,13 @@ export async function synthesizeOpenAiChunk(text: string, config: OpenAiTtsConfi
             audio = Buffer.from(await response.arrayBuffer());
         } else {
             const result = await response.json() as {
-                choices?: Array<{ finish_reason?: string; message?: { audio?: { data?: unknown; transcript?: unknown } } }>;
+                choices?: Array<{ finish_reason?: string; message?: { audio?: { data?: unknown } } }>;
             };
             const choice = result?.choices?.[0];
             if (choice?.finish_reason !== "stop") {
                 throw new Error("Audio API did not finish the narration; no episode was produced. Try a shorter article or another model.");
             }
             const output = choice.message?.audio;
-            assertNarrationTranscript(text, output?.transcript);
             if (typeof output?.data !== "string" || !output.data || !/^[A-Za-z0-9+/]+={0,2}$/.test(output.data)) {
                 throw new Error("Audio API returned no valid base64 audio");
             }

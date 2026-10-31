@@ -1302,7 +1302,7 @@ header h1 {
           <textarea id="cfg-tts-openai-instructions" rows="3" maxlength="4096" placeholder="Read calmly and clearly."></textarea>
           <div class="form-help">Describe delivery and tone. Speech API services must support instructions when provided.</div>
         </div>
-        <div class="form-group full"><div class="form-help" id="tts-transcript-help">Audio Chat and Realtime check the returned transcript against the article. Content changes stop generation; punctuation, spacing, and letter case are ignored. Numbers written as words may cause a mismatch.</div></div>
+        <div class="form-group full"><div class="form-help" id="tts-narration-help">The model controls natural spoken delivery. Audio Chat and Realtime accept generated audio without comparing its transcript to the article.</div></div>
       </div>
       <div class="form-grid" style="margin-top:16px">
         <div class="form-group full">
@@ -2103,7 +2103,7 @@ function updateTtsFields() {
   document.getElementById('cfg-tts-openai-speed').max = realtime ? '1.5' : '4';
   document.getElementById('tts-speed-help').textContent = realtime ? 'Realtime supports 0.25–1.5 (default 1.0).' : 'Speech API supports 0.25–4.0 (default 1.0).';
   document.getElementById('cfg-tts-openai-model').placeholder = realtime ? 'gpt-realtime-2.1-mini' : speech ? "Your service's speech model" : DEFAULT_OPENAI_TTS.model;
-  document.getElementById('tts-transcript-help').style.display = speech ? 'none' : '';
+  document.getElementById('tts-narration-help').style.display = speech ? 'none' : '';
   document.getElementById('tts-mode-help').textContent = speech
     ? 'Enter a speech model supported by your service. gpt-audio-1.5 uses Audio Chat mode. OpenAI Speech models shut down on January 6, 2027.'
     : realtime ? 'Use gpt-realtime-2.1-mini or a compatible Realtime model. Connects through /realtime using WebSocket; the server needs FFmpeg to produce MP3. One voice is used for all languages.'
