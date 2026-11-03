@@ -1,5 +1,7 @@
 import { Router } from "express";
 import { unlinkSync, existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
@@ -13,6 +15,9 @@ import { addLog, getLogs } from "./logs.js";
 import { InstapaperClient } from "./instapaper.js";
 import { getOnboardingStatus } from "./onboarding.js";
 import { testTranslationConfig } from "./translator.js";
+import { synthesize } from "./tts.js";
+import { DEFAULT_OPENAI_TTS, getTtsConfigIssues, resolveTtsConfig } from "./tts-config.js";
+import { listTtsModels, TTS_VOICE_SUGGESTIONS } from "./tts-catalog.js";
 import {
   DEFAULT_TEXT_PROMPT_TEMPLATE,
   DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -90,6 +95,9 @@ export function createAdminRouter(
     masked.instapaper.password = maskConfiguredSecret(masked.instapaper.password);
     masked.instapaper.consumer_secret = maskConfiguredSecret(masked.instapaper.consumer_secret);
     masked.translation.api_key = maskConfiguredSecret(masked.translation.api_key);
+    if (masked.tts.openai) {
+      masked.tts.openai.api_key = maskConfiguredSecret(masked.tts.openai.api_key);
+    }
     if (masked.admin) {
       masked.admin.password = maskConfiguredSecret(masked.admin.password);
       delete masked.admin.session_secret;
@@ -190,6 +198,71 @@ export function createAdminRouter(
         ? err.issues.join("; ")
         : (err as Error).message || "Translation test failed";
       res.status(400).json({ ok: false, error: message });
+    }
+  });
+
+  router.post("/api/tts/models", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.once("close", onClose);
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), { tts: req.body?.tts ?? {} });
+      const models = await listTtsModels(resolveTtsConfig(candidate.tts).openai, controller.signal);
+      if (!controller.signal.aborted) res.json({ models });
+    } catch (err) {
+      const message = err instanceof ConfigValidationError ? err.issues.join("; ")
+        : err instanceof Error ? err.message : "Could not fetch TTS models";
+      if (!controller.signal.aborted) res.status(400).json({ error: message });
+    } finally {
+      res.off("close", onClose);
+    }
+  });
+
+  // Preview is private, transient, and independent of pipeline readiness.
+  let previewInProgress = false;
+  router.post("/api/tts/preview", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (previewInProgress) {
+      res.status(409).json({ error: "A voice preview is already running. Please wait." });
+      return;
+    }
+    const text = req.body?.text;
+    if (typeof text !== "string" || !text.trim() || text.length > 500) {
+      res.status(400).json({ error: "Preview text must contain 1-500 characters" });
+      return;
+    }
+    let directory: string | undefined;
+    let audio: Buffer | undefined;
+    let errorMessage: string | undefined;
+    const controller = new AbortController();
+    const onClose = () => controller.abort();
+    res.once("close", onClose);
+    try {
+      const candidate = mergeConfigUpdate(getConfig(), { tts: req.body.tts ?? {} });
+      const issues = getTtsConfigIssues(candidate.tts);
+      if (issues.length) throw new ConfigValidationError(issues);
+      previewInProgress = true;
+      directory = await mkdtemp(join(tmpdir(), "instapod-preview-"));
+      const outputPath = join(directory, "preview.mp3");
+      await synthesize(text, outputPath, candidate.tts, {
+        signal: controller.signal, timeoutMs: candidate.tts.openai?.api_mode === "realtime" ? 300_000 : 120_000,
+      });
+      audio = await readFile(outputPath);
+    } catch (err) {
+      errorMessage = err instanceof ConfigValidationError ? err.issues.join("; ")
+        : err instanceof Error ? err.message : "Voice preview failed";
+    } finally {
+      try {
+        if (directory) await rm(directory, { recursive: true, force: true });
+      } finally {
+        res.off("close", onClose);
+        previewInProgress = false;
+      }
+    }
+    if (!controller.signal.aborted) {
+      if (errorMessage) res.status(400).json({ error: errorMessage });
+      else res.type("audio/mpeg").send(audio);
     }
   });
 
@@ -386,6 +459,9 @@ export function mergeConfigUpdate(
   if (typedUpdates.translation?.api_key === "••••••••") {
     merged.translation.api_key = current.translation.api_key;
   }
+  if (typedUpdates.tts?.openai?.api_key === "••••••••" && merged.tts.openai) {
+    merged.tts.openai.api_key = current.tts.openai?.api_key ?? "";
+  }
   // Preserve admin secrets
   if (merged.admin) {
     if (typedUpdates.admin?.password === "••••••••") {
@@ -427,6 +503,8 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
 // ── HTML Template ──
 
 function renderAdminPage(): string {
+  const defaultOpenAiTtsJs = JSON.stringify(DEFAULT_OPENAI_TTS);
+  const ttsVoiceSuggestionsJs = JSON.stringify(TTS_VOICE_SUGGESTIONS);
   const defaultTitlePromptJs = JSON.stringify(DEFAULT_TITLE_PROMPT_TEMPLATE);
   const defaultTextPromptJs = JSON.stringify(DEFAULT_TEXT_PROMPT_TEMPLATE);
 
@@ -654,6 +732,24 @@ header h1 {
 }
 .btn-ghost:hover { background: var(--surface2); color: var(--text); }
 .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+
+.tts-check {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-top: 6px;
+  font-size: 0.82rem;
+  color: var(--text2);
+}
+.tts-check[data-state="checking"] { border-color: var(--accent); color: var(--accent); }
+.tts-check[data-state="verified"] { border-color: var(--success); color: var(--success); }
+.tts-check[data-state="failed"] { border-color: var(--danger); color: var(--danger); }
+.tts-check-title { display: block; font-weight: 600; }
+.tts-check-detail { display: block; color: var(--text2); margin-top: 4px; }
+.tts-model-picker { display: flex; gap: 8px; }
+.tts-model-picker input { flex: 1; min-width: 0; width: 0; }
+.tts-model-picker button { white-space: nowrap; }
+#tts-openai-fields > .form-group { min-width: 0; }
 
 /* Form elements */
 .form-grid {
@@ -1136,20 +1232,88 @@ header h1 {
     </div>
 
     <!-- TTS -->
-    <div class="card">
+    <div class="card" id="tts-settings">
       <h2><span class="icon">🗣️</span> Text-to-Speech</h2>
       <div class="form-grid">
         <div class="form-group">
-          <label>Voice</label>
+          <label for="cfg-tts-provider">Provider</label>
+          <select id="cfg-tts-provider" onchange="updateTtsFields()">
+            <option value="edge-tts">Edge TTS (default)</option>
+            <option value="openai">OpenAI / compatible</option>
+          </select>
+        </div>
+        <div class="form-group full"><div class="form-help">Changes apply from the next run. Existing episodes keep their audio. Voices are AI-generated.</div></div>
+      </div>
+      <div class="form-grid" id="tts-edge-fields">
+        <div class="form-group">
+          <label for="cfg-tts-voice">Edge Voice</label>
           <input type="text" id="cfg-tts-voice" placeholder="sv-SE-SofieNeural">
         </div>
         <div class="form-group">
-          <label>Rate</label>
+          <label for="cfg-tts-rate">Rate</label>
           <input type="text" id="cfg-tts-rate" placeholder="+0%">
         </div>
         <div class="form-group">
-          <label>Pitch</label>
+          <label for="cfg-tts-pitch">Pitch</label>
           <input type="text" id="cfg-tts-pitch" placeholder="+0Hz">
+        </div>
+      </div>
+      <div class="form-grid" id="tts-openai-fields" style="display:none">
+        <div class="form-group">
+          <label for="cfg-tts-openai-api_mode">API Mode</label>
+          <select id="cfg-tts-openai-api_mode" onchange="changeTtsApiMode()">
+            <option value="audio-chat">Audio Chat Completions (OpenAI)</option>
+            <option value="speech">Speech API (compatible services)</option>
+            <option value="realtime">Realtime (OpenAI / compatible WebSocket)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-api_base">TTS API Base URL</label>
+          <input type="url" id="cfg-tts-openai-api_base" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="form-group full">
+          <label for="cfg-tts-openai-api_key">TTS API Key</label>
+          <input type="password" id="cfg-tts-openai-api_key" autocomplete="off">
+          <div class="form-help">Separate from translation. Leave empty for local services that do not require authentication.</div>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-model">TTS Model</label>
+          <div class="tts-model-picker">
+            <input type="text" id="cfg-tts-openai-model" list="tts-model-suggestions" placeholder="gpt-audio-1.5">
+            <button type="button" class="btn btn-ghost btn-sm" id="tts-fetch-models-btn" onclick="fetchTtsModels()">Fetch models</button>
+          </div>
+          <datalist id="tts-model-suggestions"><option value="gpt-audio-1.5"></option><option value="gpt-realtime-2.1-mini"></option></datalist>
+          <div id="tts-models-status" role="status" aria-live="polite" class="form-help">Fetch models from your service, or enter a name.</div>
+          <div class="form-help" id="tts-mode-help"></div>
+        </div>
+        <div class="form-group">
+          <label for="cfg-tts-openai-voice">TTS Voice</label>
+          <input type="text" id="cfg-tts-openai-voice" list="tts-voice-suggestions" placeholder="alloy">
+          <datalist id="tts-voice-suggestions"></datalist>
+          <div class="form-help" id="tts-voice-help">OpenAI voice suggestions. You can also enter your service's own voice name.</div>
+        </div>
+        <div class="form-group" id="tts-speed-field">
+          <label for="cfg-tts-openai-speed">Speaking Speed</label>
+          <input type="number" id="cfg-tts-openai-speed" min="0.25" max="4" step="0.05">
+          <div class="form-help" id="tts-speed-help"></div>
+        </div>
+        <div class="form-group full">
+          <label for="cfg-tts-openai-instructions">Voice Instructions (optional)</label>
+          <textarea id="cfg-tts-openai-instructions" rows="3" maxlength="4096" placeholder="Read calmly and clearly."></textarea>
+          <div class="form-help">Describe delivery and tone. Speech API services must support instructions when provided.</div>
+        </div>
+        <div class="form-group full"><div class="form-help" id="tts-narration-help">The model controls natural spoken delivery. Audio Chat and Realtime accept generated audio without comparing its transcript to the article.</div></div>
+      </div>
+      <div class="form-grid" style="margin-top:16px">
+        <div class="form-group full">
+          <label for="tts-preview-text">Voice Preview Text</label>
+          <textarea id="tts-preview-text" rows="2" maxlength="500">Det här är ett röstprov från Instapod.</textarea>
+          <div class="form-help">Tests the current connection, model, and voice by generating a short audio sample, including unsaved settings. API usage may be billed. No episode is created.</div>
+        </div>
+        <div class="form-group full" id="tts-connection-check">
+          <button type="button" class="btn btn-ghost btn-sm" id="tts-preview-btn" onclick="previewTts()">Test connection &amp; voice</button>
+          <div id="tts-preview-status" role="status" aria-live="polite" aria-atomic="true" class="tts-check" data-state="untested">Not tested.</div>
+          <audio id="tts-preview-audio" controls style="display:none;width:100%;margin-top:8px" aria-label="Generated voice preview"></audio>
         </div>
       </div>
     </div>
@@ -1815,6 +1979,203 @@ async function cancelSpotifyAuth() {
 }
 
 // ── Config form ──
+const DEFAULT_OPENAI_TTS = ${defaultOpenAiTtsJs};
+const TTS_VOICE_SUGGESTIONS = ${ttsVoiceSuggestionsJs};
+let ttsPreviewUrl = null;
+let ttsPreviewController = null;
+let ttsModelsController = null;
+let ttsModelsSourceValue = '';
+
+function setTtsSuggestions(id, values) {
+  const options = values.map(value => {
+    const option = document.createElement('option');
+    option.value = value;
+    return option;
+  });
+  document.getElementById(id).replaceChildren(...options);
+}
+
+function ttsModelsSource() {
+  return JSON.stringify([getValue('cfg-tts-provider'), getValue('cfg-tts-openai-api_base').trim(), getValue('cfg-tts-openai-api_key').trim()]);
+}
+
+function syncTtsModelsSource() {
+  const source = ttsModelsSource();
+  if (source === ttsModelsSourceValue) return;
+  ttsModelsSourceValue = source;
+  if (ttsModelsController) ttsModelsController.abort();
+  ttsModelsController = null;
+  setTtsSuggestions('tts-model-suggestions', [DEFAULT_OPENAI_TTS.model, 'gpt-realtime-2.1-mini']);
+  document.getElementById('tts-models-status').textContent = 'Fetch models from your service, or enter a name.';
+  const button = document.getElementById('tts-fetch-models-btn');
+  button.disabled = false;
+  button.textContent = 'Fetch models';
+}
+
+function updateTtsVoiceSuggestions() {
+  const mode = getValue('cfg-tts-openai-api_mode');
+  const speech = mode === 'speech';
+  const legacy = speech && ['tts-1', 'tts-1-hd'].includes(getValue('cfg-tts-openai-model').trim());
+  const key = legacy ? 'tts-1' : mode;
+  setTtsSuggestions('tts-voice-suggestions', TTS_VOICE_SUGGESTIONS[key]);
+  document.getElementById('tts-voice-help').textContent = 'Documented OpenAI voices for ' + (legacy ? 'tts-1 / tts-1-hd' : speech ? 'Speech API' : mode === 'realtime' ? 'Realtime' : 'Audio Chat') + '. Custom voice names are also allowed; verify them with Test connection & voice.';
+}
+
+async function fetchTtsModels() {
+  syncTtsModelsSource();
+  if (ttsModelsController) ttsModelsController.abort();
+  const controller = new AbortController();
+  ttsModelsController = controller;
+  const source = ttsModelsSource();
+  const button = document.getElementById('tts-fetch-models-btn');
+  const status = document.getElementById('tts-models-status');
+  button.disabled = true;
+  button.textContent = 'Fetching...';
+  status.textContent = 'Fetching model names...';
+  try {
+    const r = await apiFetch('/api/tts/models', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      body: JSON.stringify({ tts: { openai: { api_base: getValue('cfg-tts-openai-api_base').trim(), api_key: getValue('cfg-tts-openai-api_key').trim() } } }),
+    });
+    const data = await r.json();
+    if (controller.signal.aborted || source !== ttsModelsSource()) return;
+    if (!r.ok) throw new Error(data.error || 'Could not fetch models. Enter a model manually.');
+    if (!Array.isArray(data.models)) throw new Error('Invalid model list. Enter a model manually.');
+    setTtsSuggestions('tts-model-suggestions', data.models);
+    status.textContent = data.models.length
+      ? 'Fetched ' + data.models.length + ' models. The list may include models without audio support. Type to filter, then use Test connection & voice.'
+      : 'No models returned. Your selection is unchanged; you can enter a model manually.';
+  } catch (e) {
+    if (!controller.signal.aborted && source === ttsModelsSource()) status.textContent = e.message || 'Could not fetch models. Enter a model manually.';
+  } finally {
+    if (ttsModelsController === controller) {
+      ttsModelsController = null;
+      button.disabled = false;
+      button.textContent = 'Fetch models';
+    }
+  }
+}
+
+function setTtsCheckStatus(state, title, detail = '') {
+  const status = document.getElementById('tts-preview-status');
+  status.dataset.state = state;
+  const heading = document.createElement('span');
+  heading.className = 'tts-check-title';
+  heading.textContent = title;
+  status.replaceChildren(heading);
+  if (detail) {
+    const description = document.createElement('span');
+    description.className = 'tts-check-detail';
+    description.textContent = detail;
+    status.appendChild(description);
+  }
+}
+
+function clearTtsPreview() {
+  if (ttsPreviewController) ttsPreviewController.abort();
+  ttsPreviewController = null;
+  const audio = document.getElementById('tts-preview-audio');
+  audio.pause();
+  audio.removeAttribute('src');
+  audio.style.display = 'none';
+  if (ttsPreviewUrl) URL.revokeObjectURL(ttsPreviewUrl);
+  ttsPreviewUrl = null;
+  setTtsCheckStatus('untested', 'Not tested', 'Test the connection and voice for the current settings.');
+}
+
+function changeTtsApiMode() {
+  const mode = getValue('cfg-tts-openai-api_mode');
+  const model = document.getElementById('cfg-tts-openai-model');
+  if (mode === 'realtime' && (!model.value.trim() || model.value === DEFAULT_OPENAI_TTS.model)) model.value = 'gpt-realtime-2.1-mini';
+  if (mode === 'audio-chat' && model.value === 'gpt-realtime-2.1-mini') model.value = DEFAULT_OPENAI_TTS.model;
+  updateTtsFields();
+}
+
+function updateTtsFields() {
+  syncTtsModelsSource();
+  updateTtsVoiceSuggestions();
+  const openai = getValue('cfg-tts-provider') === 'openai';
+  const speech = getValue('cfg-tts-openai-api_mode') === 'speech';
+  const realtime = getValue('cfg-tts-openai-api_mode') === 'realtime';
+  document.getElementById('tts-edge-fields').style.display = openai ? 'none' : '';
+  document.getElementById('tts-openai-fields').style.display = openai ? '' : 'none';
+  document.getElementById('tts-speed-field').style.display = speech || realtime ? '' : 'none';
+  document.getElementById('cfg-tts-openai-speed').max = realtime ? '1.5' : '4';
+  document.getElementById('tts-speed-help').textContent = realtime ? 'Realtime supports 0.25–1.5 (default 1.0).' : 'Speech API supports 0.25–4.0 (default 1.0).';
+  document.getElementById('cfg-tts-openai-model').placeholder = realtime ? 'gpt-realtime-2.1-mini' : speech ? "Your service's speech model" : DEFAULT_OPENAI_TTS.model;
+  document.getElementById('tts-narration-help').style.display = speech ? 'none' : '';
+  document.getElementById('tts-mode-help').textContent = speech
+    ? 'Enter a speech model supported by your service. gpt-audio-1.5 uses Audio Chat mode. OpenAI Speech models shut down on January 6, 2027.'
+    : realtime ? 'Use gpt-realtime-2.1-mini or a compatible Realtime model. Connects through /realtime using WebSocket; the server needs FFmpeg to produce MP3. One voice is used for all languages.'
+    : 'Use an audio-capable chat model, such as gpt-audio-1.5. One voice is used for all languages.';
+  clearTtsPreview();
+}
+
+function getTtsFormConfig() {
+  return {
+    provider: getValue('cfg-tts-provider'),
+    voice: getValue('cfg-tts-voice'),
+    rate: getValue('cfg-tts-rate'),
+    pitch: getValue('cfg-tts-pitch'),
+    openai: {
+      api_mode: getValue('cfg-tts-openai-api_mode'),
+      api_base: getValue('cfg-tts-openai-api_base').trim(),
+      api_key: getValue('cfg-tts-openai-api_key').trim(),
+      model: getValue('cfg-tts-openai-model').trim(),
+      voice: getValue('cfg-tts-openai-voice').trim(),
+      instructions: getValue('cfg-tts-openai-instructions'),
+      speed: Number(getValue('cfg-tts-openai-speed')),
+    },
+  };
+}
+
+async function previewTts() {
+  const btn = document.getElementById('tts-preview-btn');
+  clearTtsPreview();
+  btn.disabled = true;
+  btn.textContent = 'Testing connection...';
+  const controller = new AbortController();
+  ttsPreviewController = controller;
+  const config = getTtsFormConfig();
+  setTtsCheckStatus('checking', 'Checking connection and voice...', 'Generating a short audio sample with the current settings.');
+  try {
+    const r = await apiFetch('/api/tts/preview', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({ text: getValue('tts-preview-text'), tts: config }),
+    });
+    if (!r.ok) {
+      const data = await r.json().catch(() => ({}));
+      throw new Error(data.error || 'The TTS connection test failed.');
+    }
+    const blob = await r.blob();
+    if (controller.signal.aborted) return;
+    ttsPreviewUrl = URL.createObjectURL(blob);
+    const audio = document.getElementById('tts-preview-audio');
+    audio.src = ttsPreviewUrl;
+    audio.style.display = '';
+    const checkedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const target = config.provider === 'openai'
+      ? 'OpenAI / compatible · ' + config.openai.model + ' · ' + config.openai.voice
+      : 'Edge TTS · ' + config.voice;
+    setTtsCheckStatus('verified', '✓ Connection and voice verified', target + ' · Tested at ' + checkedAt + '. Audio received successfully. Press play to listen.');
+  } catch (e) {
+    if (!controller.signal.aborted) {
+      setTtsCheckStatus('failed', 'Connection test failed', e.message || 'Could not contact the TTS service. Check the API settings and try again.');
+    }
+  } finally {
+    if (ttsPreviewController === controller) ttsPreviewController = null;
+    btn.disabled = false;
+    btn.textContent = 'Test connection & voice';
+  }
+}
+
+document.getElementById('tts-settings').addEventListener('input', () => {
+  clearTtsPreview();
+  syncTtsModelsSource();
+  updateTtsVoiceSuggestions();
+});
+
 async function loadConfig() {
   try {
     const r = await apiFetch('/api/config');
@@ -1972,6 +2333,10 @@ function populateForm(c) {
   setValue('cfg-tts-voice', c.tts?.voice);
   setValue('cfg-tts-rate', c.tts?.rate);
   setValue('cfg-tts-pitch', c.tts?.pitch);
+  setValue('cfg-tts-provider', c.tts?.provider ?? 'edge-tts');
+  const openaiTts = { ...DEFAULT_OPENAI_TTS, ...c.tts?.openai };
+  for (const [key, value] of Object.entries(openaiTts)) setValue('cfg-tts-openai-' + key, value);
+  updateTtsFields();
   setChecked('cfg-spotify-enabled', c.spotify_upload?.enabled);
   setValue('cfg-spotify-cli_path', c.spotify_upload?.cli_path);
   setValue('cfg-spotify-language', c.spotify_upload?.language);
@@ -2196,11 +2561,7 @@ async function saveConfigForm() {
       title_prompt: getValue('cfg-translation-title_prompt'),
       text_prompt: getValue('cfg-translation-text_prompt'),
     },
-    tts: {
-      voice: getValue('cfg-tts-voice'),
-      rate: getValue('cfg-tts-rate'),
-      pitch: getValue('cfg-tts-pitch'),
-    },
+    tts: getTtsFormConfig(),
     spotify_upload: {
       enabled: getChecked('cfg-spotify-enabled'),
       cli_path: getValue('cfg-spotify-cli_path') || 'save-to-spotify',

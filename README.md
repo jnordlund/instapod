@@ -2,6 +2,18 @@
 
 Convert your [Instapaper](https://www.instapaper.com/) articles into a personal podcast feed — automatically fetched, translated, read aloud via text-to-speech, and optionally uploaded to Spotify.
 
+## Screenshots
+
+### Landing page
+
+![Instapod landing page](assets/screenshots/landing.png)
+
+### Admin dashboard
+
+The dashboard below uses fictional English demo data.
+
+![Instapod admin dashboard showing five sample episodes](assets/screenshots/admin-episodes.png)
+
 ## How it works
 
 ```

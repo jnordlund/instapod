@@ -4,6 +4,7 @@ import yaml from "js-yaml";
 import cron from "node-cron";
 import type { AppConfig } from "./types.js";
 import { FEED_ACCESS_TOKEN_PATTERN } from "./feed-access.js";
+import { DEFAULT_OPENAI_TTS, getTtsConfigIssues } from "./tts-config.js";
 import {
     DEFAULT_TEXT_PROMPT_TEMPLATE,
     DEFAULT_TITLE_PROMPT_TEMPLATE,
@@ -58,6 +59,16 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         TRANSLATION_MODEL: "translation.model",
         TRANSLATION_TARGET_LANGUAGE: "translation.target_language",
         TTS_VOICE: "tts.voice",
+        TTS_PROVIDER: "tts.provider",
+        TTS_RATE: "tts.rate",
+        TTS_PITCH: "tts.pitch",
+        TTS_OPENAI_API_MODE: "tts.openai.api_mode",
+        TTS_OPENAI_API_BASE: "tts.openai.api_base",
+        TTS_OPENAI_API_KEY: "tts.openai.api_key",
+        TTS_OPENAI_MODEL: "tts.openai.model",
+        TTS_OPENAI_VOICE: "tts.openai.voice",
+        TTS_OPENAI_INSTRUCTIONS: "tts.openai.instructions",
+        TTS_OPENAI_SPEED: "tts.openai.speed",
         SPOTIFY_UPLOAD_ENABLED: "spotify_upload.enabled",
         SPOTIFY_UPLOAD_CLI_PATH: "spotify_upload.cli_path",
         SPOTIFY_UPLOAD_SHOW_ID: "spotify_upload.show_id",
@@ -89,6 +100,8 @@ function applyEnvOverrides(config: Record<string, unknown>): void {
         const lastKey = parts[parts.length - 1];
         if (configPath === "server.port") {
             target[lastKey] = parseInt(envValue, 10);
+        } else if (configPath === "tts.openai.speed") {
+            target[lastKey] = envValue.trim() ? Number(envValue) : NaN;
         } else if (
             configPath === "spotify_upload.enabled" ||
             configPath === "spotify_upload.wait_for_ready" ||
@@ -119,6 +132,8 @@ const DEFAULTS: Partial<Record<string, unknown>> = {
     "translation.title_prompt": DEFAULT_TITLE_PROMPT_TEMPLATE,
     "translation.text_prompt": DEFAULT_TEXT_PROMPT_TEMPLATE,
     "tts.voice": "sv-SE-SofieNeural",
+    "tts.provider": "edge-tts",
+    ...Object.fromEntries(Object.entries(DEFAULT_OPENAI_TTS).map(([key, value]) => [`tts.openai.${key}`, value])),
     "tts.rate": "+0%",
     "tts.pitch": "+0Hz",
     "spotify_upload.enabled": false,
@@ -151,13 +166,17 @@ function applyDefaults(config: Record<string, unknown>): void {
 
         const parts = path.split(".");
         let target = config;
+        let malformedParent = false;
         for (let i = 0; i < parts.length - 1; i++) {
-            if (!target[parts[i]] || typeof target[parts[i]] !== "object") {
+            if (target[parts[i]] === undefined) {
                 target[parts[i]] = {};
+            } else if (!isRecord(target[parts[i]])) {
+                malformedParent = true;
+                break;
             }
             target = target[parts[i]] as Record<string, unknown>;
         }
-        target[parts[parts.length - 1]] = defaultValue;
+        if (!malformedParent) target[parts[parts.length - 1]] = defaultValue;
     }
 }
 
@@ -355,7 +374,8 @@ export function validateConfig(
         "title_prompt",
         "text_prompt",
     ], issues);
-    rejectUnknownKeys(config, "tts", ["voice", "rate", "pitch"], issues);
+    rejectUnknownKeys(config, "tts", ["provider", "voice", "rate", "pitch", "openai"], issues);
+    rejectUnknownKeys(config, "tts.openai", Object.keys(DEFAULT_OPENAI_TTS), issues);
     rejectUnknownKeys(config, "spotify_upload", [
         "enabled",
         "cli_path",
@@ -403,9 +423,7 @@ export function validateConfig(
     optionalString(config, "translation.title_prompt", issues);
     optionalString(config, "translation.text_prompt", issues);
 
-    requireString(config, "tts.voice", issues, missing);
-    requireString(config, "tts.rate", issues, missing);
-    requireString(config, "tts.pitch", issues, missing);
+    issues.push(...getTtsConfigIssues(config.tts, mode === "runnable"));
 
     const spotifyUpload = getNestedValue(config, "spotify_upload");
     if (spotifyUpload !== undefined) {

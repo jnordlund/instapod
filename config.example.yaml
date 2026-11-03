@@ -18,9 +18,19 @@ translation:
   text_prompt: "You are a translator. Translate the following text to {{target_language}}. Preserve paragraph breaks. Return only the translated text, nothing else."
 
 tts:
+  provider: "edge-tts"  # edge-tts (default) or openai
+  # Edge settings are retained when switching providers.
   voice: "sv-SE-SofieNeural"
   rate: "+0%"
   pitch: "+0Hz"
+  openai:
+    api_mode: "audio-chat"  # audio-chat, speech, or realtime (WebSocket; requires FFmpeg)
+    api_base: "https://api.openai.com/v1"
+    api_key: ""  # Dedicated TTS key; may be empty for a local service.
+    model: "gpt-audio-1.5"  # Realtime: gpt-realtime-2.1-mini. Speech: your service's speech model.
+    voice: "alloy"
+    instructions: ""  # Optional delivery instructions; must be supported by the service.
+    speed: 1.0  # Speech: 0.25-4.0; Realtime: 0.25-1.5. Not used by Audio Chat.
 
 spotify_upload:
   enabled: false
