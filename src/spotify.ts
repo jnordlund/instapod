@@ -585,23 +585,32 @@ export async function uploadEpisodeToSpotify(
     if (spotify.wait_for_ready) {
         const episodeRef = state.episodeId ?? state.episodeUri;
         if (episodeRef) {
-            const statusResult = await runSaveToSpotify(
-                config,
-                ["--json", "episodes", "status", episodeRef, "--wait"],
-                { timeoutMs: 360_000 }
-            );
-
-            if (statusResult.ok) {
-                state.readyStatus =
-                    findStringValue(statusResult.json, ["status", "state"]) ?? "ready";
-            } else {
-                state.readyStatus = "unknown";
-                state.error = normalizeCommandError("episodes status", statusResult);
-            }
+            return checkSpotifyEpisodeStatus(config, state);
         }
     }
 
     return state;
+}
+
+/** Retry readiness checks without creating another remote episode. */
+export async function checkSpotifyEpisodeStatus(
+    config: AppConfig,
+    previous: SpotifyUploadState
+): Promise<SpotifyUploadState> {
+    const episodeRef = previous.episodeId || previous.episodeUri;
+    if (!episodeRef) throw new Error("Spotify episode ID is missing");
+    const { error: _error, ...state } = previous;
+    try {
+        const result = await runSaveToSpotify(
+            config,
+            ["--json", "episodes", "status", episodeRef, "--wait"],
+            { timeoutMs: 360_000 }
+        );
+        if (!result.ok) throw new Error(normalizeCommandError("episodes status", result));
+        return { ...state, readyStatus: findStringValue(result.json, ["status", "state"]) ?? "ready" };
+    } catch (err) {
+        return { ...state, readyStatus: "unknown", error: formatError(err) };
+    }
 }
 
 function runSaveToSpotify(

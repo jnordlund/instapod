@@ -4,10 +4,9 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { addLog } from "./logs.js";
 import { resolveNodeScriptCommand } from "./node-script.js";
+import { enqueueWork, isWorkPending } from "./work-queue.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-let isRunning = false;
 
 /**
  * Build a restricted set of environment variables for the child process.
@@ -133,21 +132,18 @@ export function startScheduler(
     console.log(`[scheduler] Starting with cron: ${cronExpression}`);
 
     const task = cron.schedule(cronExpression, async () => {
-        if (isRunning) {
+        if (isWorkPending()) {
             console.log("[scheduler] Previous run still in progress, skipping");
             return;
         }
 
-        isRunning = true;
         console.log(`[scheduler] Starting pipeline run at ${new Date().toISOString()}`);
 
         try {
-            await spawnPipeline();
+            await enqueueWork(spawnPipeline);
             console.log(`[scheduler] Pipeline run completed at ${new Date().toISOString()}`);
         } catch (err) {
             console.error("[scheduler] Pipeline run failed:", err);
-        } finally {
-            isRunning = false;
         }
     });
 
@@ -159,20 +155,17 @@ export function startScheduler(
  * Respects the concurrency guard.
  */
 export async function triggerManualRun(): Promise<void> {
-    if (isRunning) {
+    if (isWorkPending()) {
         console.log("[trigger] Run already in progress, skipping");
         return;
     }
 
-    isRunning = true;
     console.log(`[trigger] Starting manual pipeline run at ${new Date().toISOString()}`);
 
     try {
-        await spawnPipeline();
+        await enqueueWork(spawnPipeline);
         console.log(`[trigger] Manual run completed at ${new Date().toISOString()}`);
     } catch (err) {
         console.error("[trigger] Manual run failed:", err);
-    } finally {
-        isRunning = false;
     }
 }

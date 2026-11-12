@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../src/types.js";
 import {
     cancelSpotifyHeadlessAuth,
+    checkSpotifyEpisodeStatus,
     getSpotifyStatus,
     installSaveToSpotify,
     startSpotifyHeadlessAuth,
@@ -72,6 +73,41 @@ afterEach(() => {
 });
 
 describe("spotify integration helpers", () => {
+    it("retains uploaded episode IDs when readiness checks fail", async () => {
+        for (const [output, code] of [[JSON.stringify({ episode_id: "known-id", episode_uri: "spotify:episode:known-id" }), 0], ["", 1]] as const) {
+            spawnMock.mockImplementationOnce(() => {
+                const child = new FakeChildProcess();
+                queueMicrotask(() => {
+                    child.stdout.emit("data", output);
+                    child.stderr.emit("data", code ? "Status timeout" : "");
+                    child.emit("close", code);
+                });
+                return child as never;
+            });
+        }
+        const state = await uploadEpisodeToSpotify({ ...BASE_CONFIG, spotify_upload: { ...BASE_CONFIG.spotify_upload!, wait_for_ready: true } }, {
+            filePath: "/tmp/audio.mp3", title: "Example", source: "example.com",
+        });
+        expect(state.episodeId).toBe("known-id");
+        expect(state.uploadedAt).toBeTruthy();
+        expect(state.error).toContain("Status timeout");
+        expect(state.readyStatus).toBe("unknown");
+    });
+
+    it("rechecks readiness without uploading and clears the previous error", async () => {
+        spawnMock.mockImplementationOnce(() => {
+            const child = new FakeChildProcess();
+            queueMicrotask(() => {
+                child.stdout.emit("data", '{"status":"ready"}');
+                child.emit("close", 0);
+            });
+            return child as never;
+        });
+        const state = await checkSpotifyEpisodeStatus(BASE_CONFIG, { episodeUri: "spotify:episode:known", uploadedAt: "original-date", error: "Old error" });
+        expect(spawnMock).toHaveBeenCalledTimes(1);
+        expect(spawnMock).toHaveBeenCalledWith("save-to-spotify", ["--json", "episodes", "status", "spotify:episode:known", "--wait"], expect.any(Object));
+        expect(state).toEqual({ episodeUri: "spotify:episode:known", uploadedAt: "original-date", readyStatus: "ready" });
+    });
     it("parses JSON status output that is surrounded by extra text", async () => {
         spawnMock
             .mockImplementationOnce(() => {

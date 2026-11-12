@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import type { AppState, ProcessedBookmark } from "./types.js";
+import type { AppState, ProcessedBookmark, SpotifyUploadState } from "./types.js";
 
 const EMPTY_STATE: AppState = {
     processedBookmarks: {},
@@ -55,6 +55,15 @@ export class StateManager {
     getLastRun(): string | null {
         this.state = this.load();
         return this.state.lastRun;
+    }
+
+    /** Update Spotify alone, preserving episode identity and the last pipeline run. */
+    updateSpotify(bookmarkId: string, spotify: SpotifyUploadState): void {
+        this.state = this.load();
+        const episode = this.state.processedBookmarks[bookmarkId];
+        if (!episode) throw new Error("Episode not found");
+        episode.spotify = spotify;
+        this.save();
     }
 
     updateLastRun(): void {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
 import { StateManager } from "./state.js";
+import { SpotifyRetryError, SpotifyRetryManager, spotifyRetryIssue } from "./spotify-retry.js";
 import {
   ConfigValidationError,
   type ConfigValidationMode,
@@ -49,6 +50,7 @@ export function createAdminRouter(
   onConfigChanged?: (config: AppConfig) => void
 ): Router {
   const router = Router();
+  const spotifyRetries = new SpotifyRetryManager(getConfig, state);
 
   router.use("/admin", (req, res, next) => {
     const ip = req.ip || req.socket.remoteAddress || "unknown";
@@ -269,12 +271,33 @@ export function createAdminRouter(
   // ── API: List episodes ──
   router.get("/api/episodes", (_req, res) => {
     const episodes = state.getProcessedBookmarks();
-    res.json(episodes);
+    res.set("Cache-Control", "no-store");
+    res.json(episodes.map(episode => ({
+      ...episode,
+      spotifyRetry: spotifyRetries.getJob(episode.bookmarkId),
+      spotifyRetryIssue: episode.spotify?.error ? spotifyRetryIssue(getConfig()) : undefined,
+    })));
+  });
+
+  router.post("/api/episodes/:id/spotify/retry", (req, res) => {
+    try {
+      const job = spotifyRetries.request(req.params.id, req.body?.confirmDuplicateRisk === true);
+      res.status(202).json(job);
+    } catch (err) {
+      if (err instanceof SpotifyRetryError) {
+        res.status(err.statusCode).json({ error: err.message });
+      } else {
+        res.status(500).json({ error: "Could not start Spotify retry" });
+      }
+    }
   });
 
   // ── API: Delete episode ──
   router.delete("/api/episodes/:id", (req, res) => {
     const bookmarkId = req.params.id;
+    if (spotifyRetries.getJob(bookmarkId)) {
+      return res.status(409).json({ error: "Wait for the Spotify retry to finish before deleting this episode." });
+    }
     const config = getConfig();
     const episodes = state.getProcessedBookmarks();
     const episode = episodes.find((e) => e.bookmarkId === bookmarkId);
@@ -869,10 +892,22 @@ header h1 {
   font-size: 0.8rem;
   color: var(--text2);
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-top: 2px;
 }
 .episode-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.spotify-failed { color: var(--warning); font-weight: 500; }
+.spotify-progress { color: var(--accent2); }
+.spotify-error-details { margin-top: 8px; font-size: 0.8rem; }
+.spotify-error-details summary { cursor: pointer; color: var(--text2); }
+.spotify-error-details pre { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 6px; }
+.spotify-retry-issue { color: var(--warning); margin-top: 6px; font-size: 0.8rem; }
+@media (max-width: 700px) {
+  .episode-item { flex-wrap: wrap; }
+  .episode-info { flex-basis: 100%; }
+  .episode-actions { flex-wrap: wrap; }
+}
 
 /* Toast */
 .toast {
@@ -1553,10 +1588,12 @@ function formatLogTimestamp(iso) {
   return d.toLocaleDateString('sv-SE') + ' ' + d.toLocaleTimeString('sv-SE', { hour12: false });
 }
 
-function formatSpotifyEpisodeStatus(spotify) {
+function formatSpotifyEpisodeStatus(spotify, job) {
+  if (job?.status === 'queued') return 'Spotify retry queued';
+  if (job?.status === 'running') return job.mode === 'status' ? 'Checking Spotify status…' : 'Uploading to Spotify…';
   if (!spotify) return '';
-  if (spotify.error) return 'Spotify upload failed';
-  if (spotify.episodeUri || spotify.episodeId) return 'Spotify uploaded';
+  if (spotify.error) return spotify.episodeUri || spotify.episodeId ? 'Spotify status check failed' : 'Spotify upload failed';
+  if (spotify.uploadedAt || spotify.episodeUri || spotify.episodeId) return 'Spotify uploaded';
   return '';
 }
 
@@ -1656,11 +1693,20 @@ async function loadStatus() {
   }
 }
 
+let lastEpisodePayload = '';
+let episodeRequestVersion = 0;
 async function loadEpisodes() {
+  const requestVersion = ++episodeRequestVersion;
   try {
     const r = await apiFetch('/api/episodes');
+    if (!r.ok) throw new Error('Could not load episodes');
     const episodes = await r.json();
+    if (requestVersion !== episodeRequestVersion) return;
+    const payload = JSON.stringify(episodes);
+    if (payload === lastEpisodePayload) return;
+    lastEpisodePayload = payload;
     const list = document.getElementById('episodeList');
+    const openDetails = new Set(Array.from(list.querySelectorAll('details[open]')).map(el => el.dataset.episodeId));
 
     if (episodes.length === 0) {
       list.innerHTML = '<li class="empty-state">No episodes yet. Tag an article in Instapaper to get started.</li>';
@@ -1675,12 +1721,15 @@ async function loadEpisodes() {
             <span>⏱ \${formatDuration(ep.duration)}</span>
             <span>📅 \${formatDate(ep.pubDate)}</span>
             <span>🔗 \${escapeHtml(ep.source || '')}</span>
-            <span>\${escapeHtml(formatSpotifyEpisodeStatus(ep.spotify))}</span>
+            <span class="\${ep.spotifyRetry ? 'spotify-progress' : ep.spotify?.error ? 'spotify-failed' : ''}" role="status">\${ep.spotify?.error && !ep.spotifyRetry ? '<span aria-hidden="true">⚠</span> ' : ''}\${escapeHtml(formatSpotifyEpisodeStatus(ep.spotify, ep.spotifyRetry))}</span>
           </div>
+          \${ep.spotify?.error ? '<details class="spotify-error-details" data-episode-id="' + encodeURIComponent(ep.bookmarkId) + '"' + (openDetails.has(encodeURIComponent(ep.bookmarkId)) ? ' open' : '') + '><summary>Show error details</summary><pre>' + escapeHtml(ep.spotify.error) + '</pre></details>' : ''}
+          \${ep.spotifyRetryIssue ? '<div class="spotify-retry-issue">' + escapeHtml(ep.spotifyRetryIssue) + '</div>' : ''}
         </div>
         <div class="episode-actions">
-          <button class="btn btn-ghost btn-sm" onclick="playEpisode('\${ep.filename}')">▶</button>
-          <button class="btn btn-danger btn-sm" onclick="deleteEpisode('\${ep.bookmarkId}', this)">✕</button>
+          \${ep.spotify?.error ? '<button class="btn btn-primary btn-sm" data-episode-id="' + encodeURIComponent(ep.bookmarkId) + '" data-status-only="' + Boolean(ep.spotify.episodeId || ep.spotify.episodeUri) + '" onclick="retrySpotifyEpisode(this)"' + (ep.spotifyRetry || ep.spotifyRetryIssue ? ' disabled' : '') + '>' + (ep.spotifyRetry ? 'Retry in progress…' : ep.spotify.episodeId || ep.spotify.episodeUri ? 'Retry Spotify status check' : 'Retry Spotify upload') + '</button>' : ''}
+          <button class="btn btn-ghost btn-sm" aria-label="Play episode" data-filename="\${encodeURIComponent(ep.filename)}" onclick="playEpisode(decodeURIComponent(this.dataset.filename))">▶</button>
+          <button class="btn btn-danger btn-sm" aria-label="Delete episode" data-episode-id="\${encodeURIComponent(ep.bookmarkId)}" onclick="deleteEpisode(decodeURIComponent(this.dataset.episodeId), this)" \${ep.spotifyRetry ? 'disabled' : ''}>✕</button>
         </div>
       </li>
     \`).join('');
@@ -1758,20 +1807,43 @@ function playEpisode(filename) {
   window.open('/audio/' + encodeURIComponent(filename), '_blank');
 }
 
+async function retrySpotifyEpisode(btn) {
+  const statusOnly = btn.dataset.statusOnly === 'true';
+  if (!statusOnly && !confirm('The previous upload may have succeeded. Retrying could create a duplicate Spotify episode. Continue?')) return;
+  btn.disabled = true;
+  try {
+    const r = await apiFetch('/api/episodes/' + btn.dataset.episodeId + '/spotify/retry', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirmDuplicateRisk: !statusOnly }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Could not start Spotify retry');
+    showToast('Spotify retry queued');
+    await loadEpisodes();
+  } catch (e) {
+    if (e.message !== 'auth') showToast(e.message || 'Network error', 'error', 7000);
+    btn.disabled = false;
+  }
+}
+
 async function deleteEpisode(id, btn) {
   if (!confirm('Delete this episode?')) return;
   btn.disabled = true;
   try {
-    const r = await apiFetch('/api/episodes/' + id, { method: 'DELETE' });
+    const r = await apiFetch('/api/episodes/' + encodeURIComponent(id), { method: 'DELETE' });
     if (r.ok) {
       showToast('Episode deleted');
       loadEpisodes();
       loadStatus();
     } else {
-      showToast('Failed to delete', 'error');
+      const data = await r.json();
+      showToast(data.error || 'Failed to delete', 'error');
+      btn.disabled = false;
     }
   } catch (e) {
     showToast('Network error', 'error');
+    btn.disabled = false;
   }
 }
 
@@ -2631,6 +2703,7 @@ loadLogs(true);
 loadConfig().then(() => loadOnboardingStatus());
 loadSpotifyStatus();
 setInterval(loadStatus, 30000);
+setInterval(loadEpisodes, 5000);
 setInterval(loadOnboardingStatus, 30000);
 setInterval(() => {
   const logsTab = document.getElementById('tab-logs');
