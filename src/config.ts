@@ -11,7 +11,10 @@ import {
 } from "./translation-prompts.js";
 
 export class ConfigValidationError extends Error {
-    constructor(public readonly issues: string[]) {
+    constructor(
+        public readonly issues: string[],
+        public readonly missingFields: string[] = []
+    ) {
         super(`Invalid config: ${issues.join("; ")}`);
         this.name = "ConfigValidationError";
     }
@@ -494,7 +497,7 @@ export function validateConfig(
     }
 
     if (issues.length > 0) {
-        throw new ConfigValidationError(issues);
+        throw new ConfigValidationError(issues, missing);
     }
 }
 

@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js";
 import { StateManager } from "./state.js";
 import { createServer } from "./server.js";
-import { startScheduler, triggerManualRun } from "./scheduler.js";
+import { ImportRunner, startScheduler } from "./scheduler.js";
 import { installConsoleLogCapture } from "./logs.js";
 import { getOnboardingStatus } from "./onboarding.js";
 import type { AppConfig } from "./types.js";
@@ -17,6 +17,7 @@ async function main() {
 
     // 2. Initialize state (for the server to read — pipeline writes its own)
     const state = new StateManager(config.data_dir);
+    const imports = new ImportRunner();
     console.log(`[state] Data dir: ${config.data_dir}`);
 
     let schedulerTask: ReturnType<typeof startScheduler> | null = null;
@@ -48,13 +49,13 @@ async function main() {
             schedulerTask.stop();
         }
 
-        schedulerTask = startScheduler(nextConfig.schedule.cron);
+        schedulerTask = startScheduler(nextConfig.schedule.cron, imports);
         schedulerCron = nextConfig.schedule.cron;
         return true;
     };
 
     // 3. Start HTTP server
-    const app = createServer(config, state, () => triggerManualRun(), syncScheduler);
+    const app = createServer(config, state, imports, syncScheduler);
 
     app.listen(config.server.port, () => {
         console.log(`[server] Listening on port ${config.server.port}`);
@@ -65,7 +66,7 @@ async function main() {
     const runnableAtStartup = syncScheduler(config);
     if (runnableAtStartup) {
         console.log("[startup] Running initial pipeline...");
-        await triggerManualRun();
+        await imports.start();
     } else {
         console.log("[startup] Skipping initial pipeline until setup is complete");
     }

@@ -12,6 +12,7 @@ import { SpotifyRetryManager } from "../src/spotify-retry.js";
 import { checkSpotifyEpisodeStatus, uploadEpisodeToSpotify } from "../src/spotify.js";
 import { enqueueWork, isWorkPending } from "../src/work-queue.js";
 import { createAdminRouter } from "../src/admin.js";
+import { ImportRunner } from "../src/scheduler.js";
 
 vi.mock("../src/spotify.js", async importOriginal => ({
     ...await importOriginal<typeof import("../src/spotify.js")>(),
@@ -162,7 +163,7 @@ describe("Spotify retries", () => {
     it("authenticates requests, returns background progress, and protects queued/running audio from deletion", async () => {
         const { config, state } = setup();
         const app = express();
-        app.use(createAdminRouter(() => config, () => {}, state, async () => {}));
+        app.use(createAdminRouter(() => config, () => {}, state, new ImportRunner()));
         const url = "/api/episodes/123/spotify/retry";
         expect((await request(app, url, "POST")).status).toBe(401);
         const login = await request(app, "/api/admin/login", "POST", "", { password: "test-password" });

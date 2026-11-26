@@ -7,11 +7,13 @@ import { generateFeed } from "./feed.js";
 import { createAdminRouter } from "./admin.js";
 import { renderLandingPage } from "./landing.js";
 import { isFeedAccessAllowed, isFeedAccessEnabled } from "./feed-access.js";
+import { sendAudio } from "./audio.js";
+import type { ImportRunner } from "./scheduler.js";
 
 export function createServer(
     config: AppConfig,
     state: StateManager,
-    triggerRun: () => Promise<void>,
+    imports: ImportRunner,
     onConfigChanged?: (config: AppConfig) => void
 ) {
     const app = express();
@@ -31,7 +33,7 @@ export function createServer(
     const setConfig = (c: AppConfig) => { currentConfig = c; };
 
     // ── Admin routes ──
-    app.use(createAdminRouter(getConfig, setConfig, state, triggerRun, onConfigChanged));
+    app.use(createAdminRouter(getConfig, setConfig, state, imports, onConfigChanged));
 
     app.get("/", (_req, res) => {
         res.set("Content-Type", "text/html; charset=utf-8");
@@ -56,28 +58,6 @@ export function createServer(
             console.error("Error generating feed:", err);
             res.status(500).json({ error: "Failed to generate feed" });
         }
-    }
-
-    function sendAudio(filename: string, res: express.Response): void {
-        // Validate filename to prevent path traversal
-        if (!/^[a-zA-Z0-9_\-]+\.mp3$/.test(filename)) {
-            res.status(400).json({ error: "Invalid filename" });
-            return;
-        }
-
-        const filePath = join(audioDir, filename);
-
-        // Double-check resolved path stays within audioDir
-        if (!resolve(filePath).startsWith(resolve(audioDir) + "/")) {
-            res.status(400).json({ error: "Invalid filename" });
-            return;
-        }
-
-        res.sendFile(filePath, (err) => {
-            if (err) {
-                res.status(404).json({ error: "Audio file not found" });
-            }
-        });
     }
 
     /**
@@ -105,23 +85,23 @@ export function createServer(
     /**
      * GET /audio/:filename — serve mp3 files when token protection is disabled
      */
-    app.get("/audio/:filename", (req, res) => {
+    app.get("/audio/:filename", (req, res, next) => {
         if (isFeedAccessEnabled(currentConfig)) {
             res.status(404).end();
             return;
         }
-        sendAudio(req.params.filename, res);
+        sendAudio(res, next, audioDir, req.params.filename);
     });
 
     /**
      * GET /:token/audio/:filename — serve mp3 files when token protection is enabled
      */
-    app.get("/:token/audio/:filename", (req, res) => {
+    app.get("/:token/audio/:filename", (req, res, next) => {
         if (!isFeedAccessAllowed(currentConfig, req.params.token)) {
             res.status(404).end();
             return;
         }
-        sendAudio(req.params.filename, res);
+        sendAudio(res, next, audioDir, req.params.filename);
     });
 
     /**
