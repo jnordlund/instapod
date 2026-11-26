@@ -127,7 +127,8 @@ function spawnPipeline(): Promise<void> {
  * Guards against concurrent runs.
  */
 export function startScheduler(
-    cronExpression: string
+    cronExpression: string,
+    imports: ImportRunner
 ): cron.ScheduledTask {
     console.log(`[scheduler] Starting with cron: ${cronExpression}`);
 
@@ -137,35 +138,38 @@ export function startScheduler(
             return;
         }
 
-        console.log(`[scheduler] Starting pipeline run at ${new Date().toISOString()}`);
-
-        try {
-            await enqueueWork(spawnPipeline);
-            console.log(`[scheduler] Pipeline run completed at ${new Date().toISOString()}`);
-        } catch (err) {
-            console.error("[scheduler] Pipeline run failed:", err);
-        }
+        await imports.start();
     });
 
     return task;
 }
 
-/**
- * Manually trigger a pipeline run (used by POST /trigger).
- * Respects the concurrency guard.
- */
-export async function triggerManualRun(): Promise<void> {
-    if (isWorkPending()) {
-        console.log("[trigger] Run already in progress, skipping");
-        return;
+type ImportStatus = "idle" | "queued" | "running" | "completed" | "failed";
+
+export class ImportRunner {
+    private currentStatus: ImportStatus = "idle";
+
+    constructor(private readonly run: () => Promise<void> = spawnPipeline) {}
+
+    get status(): ImportStatus {
+        return this.currentStatus;
     }
 
-    console.log(`[trigger] Starting manual pipeline run at ${new Date().toISOString()}`);
+    start(): Promise<void> | null {
+        if (this.status === "queued" || this.status === "running") return null;
 
-    try {
-        await enqueueWork(spawnPipeline);
-        console.log(`[trigger] Manual run completed at ${new Date().toISOString()}`);
-    } catch (err) {
-        console.error("[trigger] Manual run failed:", err);
+        this.currentStatus = "queued";
+        return enqueueWork(async () => {
+            this.currentStatus = "running";
+            console.log("[import] Pipeline started");
+            try {
+                await this.run();
+                this.currentStatus = "completed";
+                console.log("[import] Pipeline completed");
+            } catch (err) {
+                this.currentStatus = "failed";
+                console.error("[import] Pipeline failed:", err);
+            }
+        });
     }
 }

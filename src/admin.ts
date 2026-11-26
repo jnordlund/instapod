@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { AppConfig } from "./types.js";
+import { sendAudio } from "./audio.js";
+import type { ImportRunner } from "./scheduler.js";
 import { StateManager } from "./state.js";
 import { SpotifyRetryError, SpotifyRetryManager, spotifyRetryIssue } from "./spotify-retry.js";
 import {
@@ -46,10 +48,11 @@ export function createAdminRouter(
   getConfig: () => AppConfig,
   setConfig: (c: AppConfig) => void,
   state: StateManager,
-  triggerRun: () => Promise<void>,
+  imports: ImportRunner,
   onConfigChanged?: (config: AppConfig) => void
 ): Router {
   const router = Router();
+  const audioDir = resolve(getConfig().data_dir, "audio");
   const spotifyRetries = new SpotifyRetryManager(getConfig, state);
 
   router.use("/admin", (req, res, next) => {
@@ -124,6 +127,7 @@ export function createAdminRouter(
         res.status(400).json({
           error: "Invalid configuration",
           issues: err.issues,
+          ...configFieldFeedback(err),
         });
         return;
       }
@@ -157,7 +161,8 @@ export function createAdminRouter(
       if (missing.length > 0) {
         res.status(400).json({
           ok: false,
-          error: `Missing ${missing.map(([path]) => path).join(", ")}`,
+          error: "Instapaper credentials are incomplete",
+          fieldErrors: requiredFieldErrors(missing.map(([path]) => path)),
         });
         return;
       }
@@ -169,7 +174,10 @@ export function createAdminRouter(
       const message = err instanceof ConfigValidationError
         ? err.issues.join("; ")
         : (err as Error).message || "Instapaper test failed";
-      res.status(400).json({ ok: false, error: message });
+      res.status(400).json({
+        ok: false, error: message,
+        ...(err instanceof ConfigValidationError ? configFieldFeedback(err) : {}),
+      });
     }
   });
 
@@ -188,7 +196,8 @@ export function createAdminRouter(
       if (missing.length > 0) {
         res.status(400).json({
           ok: false,
-          error: `Missing ${missing.map(([path]) => path).join(", ")}`,
+          error: "Translation settings are incomplete",
+          fieldErrors: requiredFieldErrors(missing.map(([path]) => path)),
         });
         return;
       }
@@ -199,7 +208,10 @@ export function createAdminRouter(
       const message = err instanceof ConfigValidationError
         ? err.issues.join("; ")
         : (err as Error).message || "Translation test failed";
-      res.status(400).json({ ok: false, error: message });
+      res.status(400).json({
+        ok: false, error: message,
+        ...(err instanceof ConfigValidationError ? configFieldFeedback(err) : {}),
+      });
     }
   });
 
@@ -231,12 +243,13 @@ export function createAdminRouter(
     }
     const text = req.body?.text;
     if (typeof text !== "string" || !text.trim() || text.length > 500) {
-      res.status(400).json({ error: "Preview text must contain 1-500 characters" });
+      const message = "Enter preview text between 1 and 500 characters.";
+      res.status(400).json({ error: message, fieldErrors: { text: message } });
       return;
     }
     let directory: string | undefined;
     let audio: Buffer | undefined;
-    let errorMessage: string | undefined;
+    let failure: { error: string; fieldErrors?: Record<string, string>; formErrors?: string[] } | undefined;
     const controller = new AbortController();
     const onClose = () => controller.abort();
     res.once("close", onClose);
@@ -252,8 +265,9 @@ export function createAdminRouter(
       });
       audio = await readFile(outputPath);
     } catch (err) {
-      errorMessage = err instanceof ConfigValidationError ? err.issues.join("; ")
-        : err instanceof Error ? err.message : "Voice preview failed";
+      failure = err instanceof ConfigValidationError
+        ? { error: err.issues.join("; "), ...configFieldFeedback(err) }
+        : { error: err instanceof Error ? err.message : "Voice preview failed" };
     } finally {
       try {
         if (directory) await rm(directory, { recursive: true, force: true });
@@ -263,7 +277,7 @@ export function createAdminRouter(
       }
     }
     if (!controller.signal.aborted) {
-      if (errorMessage) res.status(400).json({ error: errorMessage });
+      if (failure) res.status(400).json(failure);
       else res.type("audio/mpeg").send(audio);
     }
   });
@@ -277,6 +291,16 @@ export function createAdminRouter(
       spotifyRetry: spotifyRetries.getJob(episode.bookmarkId),
       spotifyRetryIssue: episode.spotify?.error ? spotifyRetryIssue(getConfig()) : undefined,
     })));
+  });
+
+  router.get("/api/episodes/:id/audio", (req, res, next) => {
+    res.set("Cache-Control", "private, no-store");
+    const episode = state.getProcessedBookmarks().find(ep => ep.bookmarkId === req.params.id);
+    if (!episode) {
+      res.status(404).json({ error: "Episode not found" });
+      return;
+    }
+    sendAudio(res, next, audioDir, episode.filename);
   });
 
   router.post("/api/episodes/:id/spotify/retry", (req, res) => {
@@ -325,9 +349,11 @@ export function createAdminRouter(
   // ── API: Pipeline status ──
   router.get("/api/status", (_req, res) => {
     const episodes = state.getProcessedBookmarks();
+    res.set("Cache-Control", "no-store");
     res.json({
       episodeCount: episodes.length,
       lastRun: state.getLastRun(),
+      importStatus: imports.status,
     });
   });
 
@@ -448,10 +474,11 @@ export function createAdminRouter(
       return;
     }
 
-    res.json({ status: "started", message: "Pipeline run triggered" });
-    triggerRun().catch((err) =>
-      console.error("[admin] Triggered run failed:", err)
-    );
+    if (!imports.start()) {
+      res.status(409).json({ status: "busy", importStatus: imports.status, message: "An import is already queued or running" });
+      return;
+    }
+    res.json({ status: "started", importStatus: imports.status, message: "Pipeline run triggered" });
   });
 
   return router;
@@ -495,6 +522,26 @@ export function mergeConfigUpdate(
 
   validateConfig(merged, { mode });
   return merged;
+}
+
+function requiredFieldErrors(paths: string[]): Record<string, string> {
+  return Object.fromEntries(paths.map(path => [path, "This field is required."]));
+}
+
+function configFieldFeedback(error: ConfigValidationError) {
+  const fieldErrors = requiredFieldErrors(error.missingFields);
+  const formErrors: string[] = [];
+  for (const issue of error.issues) {
+    if (error.missingFields.length && issue.startsWith("Missing required config fields: ")) continue;
+    const match = /^(\w+(?:\.\w+)+) (.+)$/.exec(issue);
+    if (match) {
+      const [, path, detail] = match;
+      fieldErrors[path] ??= `This field ${detail}.`;
+    } else {
+      formErrors.push(issue);
+    }
+  }
+  return { fieldErrors, formErrors };
 }
 
 function compactHeader(value?: string): string {
@@ -897,6 +944,11 @@ header h1 {
   margin-top: 2px;
 }
 .episode-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.episode-playback { margin-top: 8px; }
+.episode-playback audio { width: 100%; max-width: 440px; }
+.episode-playback-error, .field-error { color: #fca5a5; font-size: 0.82rem; }
+.form-group [aria-invalid="true"] { border-color: #fca5a5; }
+.import-status { margin-top: 4px; }
 .spotify-failed { color: var(--warning); font-weight: 500; }
 .spotify-progress { color: var(--accent2); }
 .spotify-error-details { margin-top: 8px; font-size: 0.8rem; }
@@ -1042,10 +1094,11 @@ header h1 {
     <div class="stat">
       <div class="label">Actions</div>
       <div class="value">
-        <button class="btn btn-primary btn-sm" onclick="triggerPipeline()" id="triggerBtn">
+        <button class="btn btn-primary btn-sm" onclick="triggerPipeline()" id="triggerBtn" disabled>
           ▶ Run Now
         </button>
       </div>
+      <div id="importStatus" class="form-help import-status" role="status">Checking import status…</div>
     </div>
   </div>
 
@@ -1067,6 +1120,7 @@ header h1 {
           <button class="btn btn-primary" onclick="saveSetupForm()" id="setupSaveBtn">Save setup</button>
           <button class="btn btn-ghost" onclick="switchTab('config')">Advanced configuration</button>
         </div>
+        <div class="field-error" id="setupSaveResult" role="alert"></div>
         <div class="setup-blockers" id="setupBlockers"></div>
       </div>
       <div class="setup-panel setup-progress">
@@ -1079,24 +1133,24 @@ header h1 {
       <h2><span class="icon">1</span> Connect Instapaper</h2>
       <div class="form-grid">
         <div class="form-group">
-          <label>Username</label>
+          <label for="setup-instapaper-username">Username</label>
           <input type="text" id="setup-instapaper-username" autocomplete="username">
         </div>
         <div class="form-group">
-          <label>Password</label>
+          <label for="setup-instapaper-password">Password</label>
           <input type="password" id="setup-instapaper-password" autocomplete="current-password">
         </div>
         <div class="form-group">
-          <label>Consumer Key</label>
+          <label for="setup-instapaper-consumer_key">Consumer Key</label>
           <input type="text" id="setup-instapaper-consumer_key">
         </div>
         <div class="form-group">
-          <label>Consumer Secret</label>
+          <label for="setup-instapaper-consumer_secret">Consumer Secret</label>
           <input type="password" id="setup-instapaper-consumer_secret">
         </div>
         <div class="form-group full" style="align-items:flex-start;">
           <button type="button" class="btn btn-ghost btn-sm" onclick="testInstapaper()" id="setupInstapaperTestBtn">Test Instapaper</button>
-          <div class="form-help" id="setupInstapaperTestResult">Add credentials, then test the connection.</div>
+          <div class="form-help" id="setupInstapaperTestResult" role="status">Add credentials, then test the connection.</div>
         </div>
       </div>
     </div>
@@ -1105,24 +1159,24 @@ header h1 {
       <h2><span class="icon">2</span> Configure translation</h2>
       <div class="form-grid">
         <div class="form-group">
-          <label>API Base URL</label>
+          <label for="setup-translation-api_base">API Base URL</label>
           <input type="url" id="setup-translation-api_base">
         </div>
         <div class="form-group">
-          <label>API Key</label>
+          <label for="setup-translation-api_key">API Key</label>
           <input type="password" id="setup-translation-api_key">
         </div>
         <div class="form-group">
-          <label>Model</label>
+          <label for="setup-translation-model">Model</label>
           <input type="text" id="setup-translation-model">
         </div>
         <div class="form-group">
-          <label>Target Language</label>
+          <label for="setup-translation-target_language">Target Language</label>
           <input type="text" id="setup-translation-target_language">
         </div>
         <div class="form-group full" style="align-items:flex-start;">
           <button type="button" class="btn btn-ghost btn-sm" onclick="testTranslation()" id="setupTranslationTestBtn">Test Translation</button>
-          <div class="form-help" id="setupTranslationTestResult">Use any OpenAI-compatible chat completions API.</div>
+          <div class="form-help" id="setupTranslationTestResult" role="status">Use any OpenAI-compatible chat completions API.</div>
         </div>
       </div>
     </div>
@@ -1131,24 +1185,24 @@ header h1 {
       <h2><span class="icon">3</span> Publish the feed</h2>
       <div class="form-grid">
         <div class="form-group full">
-          <label>Base URL</label>
-          <input type="url" id="setup-server-base_url" placeholder="https://pod.example.com">
-          <div class="form-help">This is used to generate the public RSS and audio URLs.</div>
+          <label for="setup-server-base_url">Base URL</label>
+          <input type="url" id="setup-server-base_url" placeholder="https://pod.example.com" aria-describedby="setup-base-url-help">
+          <div class="form-help" id="setup-base-url-help">This is used to generate the public RSS and audio URLs.</div>
         </div>
         <div class="form-group">
-          <label>Feed Title</label>
+          <label for="setup-feed-title">Feed Title</label>
           <input type="text" id="setup-feed-title">
         </div>
         <div class="form-group">
-          <label>Feed Author</label>
+          <label for="setup-feed-author">Feed Author</label>
           <input type="text" id="setup-feed-author">
         </div>
         <div class="form-group full">
-          <label>Feed Description</label>
+          <label for="setup-feed-description">Feed Description</label>
           <input type="text" id="setup-feed-description">
         </div>
         <div class="form-group">
-          <label>Language</label>
+          <label for="setup-feed-language">Language</label>
           <input type="text" id="setup-feed-language" placeholder="sv">
         </div>
       </div>
@@ -1161,7 +1215,7 @@ header h1 {
       </div>
       <div class="setup-actions">
         <div class="form-help" id="setupRunHint">Complete the required setup before running the pipeline.</div>
-        <button class="btn btn-primary" onclick="triggerPipeline()" id="setupRunBtn">Run Now</button>
+        <button class="btn btn-primary" onclick="triggerPipeline()" id="setupRunBtn" disabled>Run Now</button>
       </div>
     </div>
   </div>
@@ -1173,6 +1227,10 @@ header h1 {
       <ul class="episode-list" id="episodeList">
         <li class="empty-state">Loading...</li>
       </ul>
+      <div id="episodePlayer" class="episode-playback" hidden>
+        <audio id="episodeAudio" controls preload="none" aria-label="Episode audio" aria-describedby="episodeAudioError"></audio>
+        <div id="episodeAudioError" class="episode-playback-error" role="status"></div>
+      </div>
     </div>
   </div>
 
@@ -1342,8 +1400,8 @@ header h1 {
       <div class="form-grid" style="margin-top:16px">
         <div class="form-group full">
           <label for="tts-preview-text">Voice Preview Text</label>
-          <textarea id="tts-preview-text" rows="2" maxlength="500">Det här är ett röstprov från Instapod.</textarea>
-          <div class="form-help">Tests the current connection, model, and voice by generating a short audio sample, including unsaved settings. API usage may be billed. No episode is created.</div>
+          <textarea id="tts-preview-text" rows="2" maxlength="500" aria-describedby="tts-preview-help">Det här är ett röstprov från Instapod.</textarea>
+          <div class="form-help" id="tts-preview-help">Tests the current connection, model, and voice by generating a short audio sample, including unsaved settings. API usage may be billed. No episode is created.</div>
         </div>
         <div class="form-group full" id="tts-connection-check">
           <button type="button" class="btn btn-ghost btn-sm" id="tts-preview-btn" onclick="previewTts()">Test connection &amp; voice</button>
@@ -1538,6 +1596,9 @@ header h1 {
 // ── State ──
 let currentConfig = null;
 let onboardingStatus = null;
+let importStatus = null;
+let startingImport = false;
+let statusRequestVersion = 0;
 let initialTabApplied = false;
 let logEntries = [];
 let latestLogId = 0;
@@ -1620,7 +1681,6 @@ function renderOnboardingStatus(status) {
   const summary = document.getElementById('setupSummary');
   const blockers = document.getElementById('setupBlockers');
   const stepsEl = document.getElementById('setupSteps');
-  const runHint = document.getElementById('setupRunHint');
   const statusBadge = document.getElementById('statusBadge');
 
   if (progressValue) progressValue.textContent = completeRequired + '/' + required.length;
@@ -1649,11 +1709,6 @@ function renderOnboardingStatus(status) {
       </div>
     \`).join('');
   }
-  if (runHint) {
-    runHint.textContent = status.runnable
-      ? (status.firstRunComplete ? 'Pipeline has run before. You can run it again manually.' : 'Setup is complete. Run once to create the first episode.')
-      : 'Complete the required setup before running the pipeline.';
-  }
   updateRunControls();
 
   if (!initialTabApplied) {
@@ -1663,12 +1718,30 @@ function renderOnboardingStatus(status) {
 }
 
 function updateRunControls() {
-  const canRun = Boolean(onboardingStatus?.runnable);
+  const busy = importStatus === 'queued' || importStatus === 'running';
+  const canRun = Boolean(onboardingStatus?.runnable && importStatus && !busy && !startingImport);
+  const statusText = {
+    idle: '',
+    queued: 'Import queued.',
+    running: 'Import running…',
+    completed: 'Import completed.',
+    failed: 'Import failed. See Logs for details.',
+  }[importStatus] ?? 'Checking import status…';
+  const status = document.getElementById('importStatus');
+  if (status.textContent !== statusText) status.textContent = statusText;
+  const setupHint = document.getElementById('setupRunHint');
+  const setupHintText = onboardingStatus?.runnable
+    ? statusText || (onboardingStatus.firstRunComplete ? 'You can run the pipeline again manually.' : 'Run once to create the first episode.')
+    : 'Complete the required setup before running the pipeline.';
+  if (setupHint.textContent !== setupHintText) setupHint.textContent = setupHintText;
+  const label = startingImport ? 'Requesting import…'
+    : importStatus === 'queued' ? 'Queued…'
+    : importStatus === 'running' ? 'Running…' : '▶ Run Now';
   for (const id of ['triggerBtn', 'setupRunBtn']) {
     const btn = document.getElementById(id);
-    if (!btn) continue;
+    if (btn.textContent.trim() !== label) btn.textContent = label;
     btn.disabled = !canRun;
-    btn.title = canRun ? '' : 'Complete setup before running the pipeline';
+    btn.title = onboardingStatus && !onboardingStatus.runnable ? 'Complete setup before running the pipeline' : '';
   }
 }
 
@@ -1683,11 +1756,22 @@ async function loadOnboardingStatus() {
 }
 
 async function loadStatus() {
+  if (startingImport) return;
+  const requestVersion = ++statusRequestVersion;
   try {
     const r = await apiFetch('/api/status');
+    if (!r.ok) throw new Error('Could not load import status');
     const data = await r.json();
+    if (requestVersion !== statusRequestVersion) return;
     document.getElementById('episodeCount').textContent = data.episodeCount;
     document.getElementById('lastRun').textContent = formatDate(data.lastRun);
+    const finished = importStatus !== data.importStatus && ['completed', 'failed'].includes(data.importStatus);
+    importStatus = data.importStatus;
+    updateRunControls();
+    if (finished) {
+      loadEpisodes();
+      loadOnboardingStatus();
+    }
   } catch (e) {
     if (e.message !== 'auth') console.error('Failed to load status:', e);
   }
@@ -1695,6 +1779,14 @@ async function loadStatus() {
 
 let lastEpisodePayload = '';
 let episodeRequestVersion = 0;
+let playingEpisodeId = null;
+const episodePlayer = document.getElementById('episodePlayer');
+const episodeAudio = document.getElementById('episodeAudio');
+const episodeAudioError = document.getElementById('episodeAudioError');
+episodeAudio.addEventListener('error', () => {
+  if (playingEpisodeId !== null) episodeAudioError.textContent = 'Could not load episode audio. It may be missing or your session may have expired.';
+});
+
 async function loadEpisodes() {
   const requestVersion = ++episodeRequestVersion;
   try {
@@ -1710,6 +1802,7 @@ async function loadEpisodes() {
 
     if (episodes.length === 0) {
       list.innerHTML = '<li class="empty-state">No episodes yet. Tag an article in Instapaper to get started.</li>';
+      attachEpisodePlayer();
       return;
     }
 
@@ -1725,14 +1818,16 @@ async function loadEpisodes() {
           </div>
           \${ep.spotify?.error ? '<details class="spotify-error-details" data-episode-id="' + encodeURIComponent(ep.bookmarkId) + '"' + (openDetails.has(encodeURIComponent(ep.bookmarkId)) ? ' open' : '') + '><summary>Show error details</summary><pre>' + escapeHtml(ep.spotify.error) + '</pre></details>' : ''}
           \${ep.spotifyRetryIssue ? '<div class="spotify-retry-issue">' + escapeHtml(ep.spotifyRetryIssue) + '</div>' : ''}
+          <div class="episode-playback-slot" data-episode-id="\${encodeURIComponent(ep.bookmarkId)}"></div>
         </div>
         <div class="episode-actions">
           \${ep.spotify?.error ? '<button class="btn btn-primary btn-sm" data-episode-id="' + encodeURIComponent(ep.bookmarkId) + '" data-status-only="' + Boolean(ep.spotify.episodeId || ep.spotify.episodeUri) + '" onclick="retrySpotifyEpisode(this)"' + (ep.spotifyRetry || ep.spotifyRetryIssue ? ' disabled' : '') + '>' + (ep.spotifyRetry ? 'Retry in progress…' : ep.spotify.episodeId || ep.spotify.episodeUri ? 'Retry Spotify status check' : 'Retry Spotify upload') + '</button>' : ''}
-          <button class="btn btn-ghost btn-sm" aria-label="Play episode" data-filename="\${encodeURIComponent(ep.filename)}" onclick="playEpisode(decodeURIComponent(this.dataset.filename))">▶</button>
+          <button class="btn btn-ghost btn-sm" aria-label="Play episode" data-episode-id="\${encodeURIComponent(ep.bookmarkId)}" onclick="playEpisode(this)">▶</button>
           <button class="btn btn-danger btn-sm" aria-label="Delete episode" data-episode-id="\${encodeURIComponent(ep.bookmarkId)}" onclick="deleteEpisode(decodeURIComponent(this.dataset.episodeId), this)" \${ep.spotifyRetry ? 'disabled' : ''}>✕</button>
         </div>
       </li>
     \`).join('');
+    attachEpisodePlayer();
   } catch (e) {
     console.error('Failed to load episodes:', e);
   }
@@ -1803,8 +1898,86 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
-function playEpisode(filename) {
-  window.open('/audio/' + encodeURIComponent(filename), '_blank');
+function setFieldError(field, message) {
+  const id = field.id + '-error';
+  let error = document.getElementById(id);
+  const references = (field.getAttribute('aria-describedby') || '').split(' ').filter(ref => ref && ref !== id);
+  if (message) {
+    if (!error) {
+      error = document.createElement('div');
+      error.id = id;
+      error.className = 'field-error';
+      field.closest('.form-group').append(error);
+    }
+    error.textContent = message;
+    references.push(id);
+    field.setAttribute('aria-invalid', 'true');
+  } else {
+    error?.remove();
+    field.removeAttribute('aria-invalid');
+  }
+  if (references.length) field.setAttribute('aria-describedby', references.join(' '));
+  else field.removeAttribute('aria-describedby');
+}
+
+function clearFieldErrors(container) {
+  container.querySelectorAll('[aria-invalid="true"]').forEach(field => setFieldError(field, ''));
+}
+
+function showFieldErrors(data, findFieldId) {
+  const remaining = [...(data.formErrors || [])];
+  const fields = Object.entries(data.fieldErrors || {}).flatMap(([path, message]) => {
+    const field = document.getElementById(findFieldId(path));
+    if (!field || !field.getClientRects().length) {
+      remaining.push(path + ': ' + message);
+      return [];
+    }
+    setFieldError(field, message);
+    return [field];
+  });
+  fields.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) ? -1 : 1);
+  fields[0]?.focus();
+  if (fields.length) remaining.unshift('Check the highlighted fields.');
+  return remaining.join(' ');
+}
+
+function clearEditedFieldError(event) {
+  if (event.target.hasAttribute('aria-invalid')) setFieldError(event.target, '');
+}
+
+const setupPanel = document.getElementById('tab-setup');
+const ttsSettings = document.getElementById('tts-settings');
+const setupFieldId = path => 'setup-' + path.replaceAll('.', '-');
+setupPanel.addEventListener('input', clearEditedFieldError);
+
+function attachEpisodePlayer() {
+  if (playingEpisodeId === null) return;
+  const slot = Array.from(document.querySelectorAll('.episode-playback-slot'))
+    .find(el => el.dataset.episodeId === playingEpisodeId);
+  if (slot) {
+    slot.append(episodePlayer);
+    episodePlayer.hidden = false;
+    return;
+  }
+  playingEpisodeId = null;
+  episodeAudio.removeAttribute('src');
+  episodeAudio.load();
+  episodePlayer.hidden = true;
+}
+
+function playEpisode(button) {
+  const id = button.dataset.episodeId;
+  episodeAudioError.textContent = '';
+  if (playingEpisodeId !== id || episodeAudio.error) {
+    playingEpisodeId = id;
+    attachEpisodePlayer();
+    episodeAudio.src = '/api/episodes/' + id + '/audio';
+  }
+  episodeAudio.play().catch(error => {
+    if (playingEpisodeId === id && error.name === 'NotAllowedError') {
+      episodeAudioError.textContent = 'Use the audio controls to start playback.';
+    }
+  });
 }
 
 async function retrySpotifyEpisode(btn) {
@@ -1854,36 +2027,29 @@ async function triggerPipeline() {
     updateRunControls();
     return;
   }
-  const btn = document.getElementById('triggerBtn');
-  const setupBtn = document.getElementById('setupRunBtn');
-  const buttons = [btn, setupBtn].filter(Boolean);
-  buttons.forEach((button) => {
-    button.innerHTML = '<span class="spinner"></span> Running...';
-    button.disabled = true;
-  });
+  if (startingImport || importStatus === 'queued' || importStatus === 'running') return;
+  startingImport = true;
+  statusRequestVersion++;
+  updateRunControls();
   try {
     const r = await apiFetch('/api/trigger', { method: 'POST' });
-    if (r.ok) {
-      showToast('Pipeline triggered');
-    } else if (r.status === 409) {
-      const data = await r.json();
-      if (data.onboarding) renderOnboardingStatus(data.onboarding);
-      showToast(data.message || 'Complete setup before running', 'error');
+    const data = await r.json();
+    if (r.ok || data.status === 'busy') {
+      importStatus = data.importStatus;
+    } else if (data.status === 'blocked') {
+      renderOnboardingStatus(data.onboarding);
       switchTab('setup');
     } else {
       showToast('Failed to trigger', 'error');
     }
   } catch (e) {
-    showToast('Failed to trigger', 'error');
-  }
-  setTimeout(() => {
-    buttons.forEach((button) => {
-      button.innerHTML = '▶ Run Now';
-    });
+    importStatus = null;
+    if (e.message !== 'auth') showToast('Failed to request import', 'error');
+  } finally {
+    startingImport = false;
+    updateRunControls();
     loadStatus();
-    loadEpisodes();
-    loadOnboardingStatus();
-  }, 5000);
+  }
 }
 
 // ── Spotify onboarding ──
@@ -2180,6 +2346,7 @@ function updateTtsFields() {
     ? 'Enter a speech model supported by your service. gpt-audio-1.5 uses Audio Chat mode. OpenAI Speech models shut down on January 6, 2027.'
     : realtime ? 'Use gpt-realtime-2.1-mini or a compatible Realtime model. Connects through /realtime using WebSocket; the server needs FFmpeg to produce MP3. One voice is used for all languages.'
     : 'Use an audio-capable chat model, such as gpt-audio-1.5. One voice is used for all languages.';
+  clearFieldErrors(ttsSettings);
   clearTtsPreview();
 }
 
@@ -2204,6 +2371,14 @@ function getTtsFormConfig() {
 async function previewTts() {
   const btn = document.getElementById('tts-preview-btn');
   clearTtsPreview();
+  clearFieldErrors(ttsSettings);
+  const textField = document.getElementById('tts-preview-text');
+  const text = textField.value;
+  if (!text.trim() || text.length > textField.maxLength) {
+    setFieldError(textField, 'Enter preview text between 1 and 500 characters.');
+    textField.focus();
+    return;
+  }
   btn.disabled = true;
   btn.textContent = 'Testing connection...';
   const controller = new AbortController();
@@ -2214,10 +2389,16 @@ async function previewTts() {
     const r = await apiFetch('/api/tts/preview', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       signal: controller.signal,
-      body: JSON.stringify({ text: getValue('tts-preview-text'), tts: config }),
+      body: JSON.stringify({ text, tts: config }),
     });
     if (!r.ok) {
       const data = await r.json().catch(() => ({}));
+      if (controller.signal.aborted) return;
+      const validation = showFieldErrors(data, path => path === 'text' ? 'tts-preview-text' : 'cfg-' + path.replaceAll('.', '-'));
+      if (validation) {
+        setTtsCheckStatus('failed', 'Check your preview settings', validation);
+        return;
+      }
       throw new Error(data.error || 'The TTS connection test failed.');
     }
     const blob = await r.blob();
@@ -2242,7 +2423,8 @@ async function previewTts() {
   }
 }
 
-document.getElementById('tts-settings').addEventListener('input', () => {
+ttsSettings.addEventListener('input', event => {
+  clearEditedFieldError(event);
   clearTtsPreview();
   syncTtsModelsSource();
   updateTtsVoiceSuggestions();
@@ -2533,6 +2715,9 @@ function buildSetupConfigUpdate() {
 
 async function saveSetupForm() {
   const btn = document.getElementById('setupSaveBtn');
+  const result = document.getElementById('setupSaveResult');
+  clearFieldErrors(setupPanel);
+  result.textContent = '';
   btn.innerHTML = '<span class="spinner"></span> Saving...';
   btn.disabled = true;
   try {
@@ -2547,10 +2732,10 @@ async function saveSetupForm() {
       await loadOnboardingStatus();
     } else {
       const data = await r.json().catch(() => ({}));
-      showToast(data.error || 'Failed to save setup', 'error');
+      result.textContent = showFieldErrors(data, setupFieldId) || data.error || 'Failed to save setup.';
     }
   } catch (e) {
-    showToast('Network error', 'error');
+    if (e.message !== 'auth') result.textContent = 'Network error. Try saving again.';
   } finally {
     btn.innerHTML = 'Save setup';
     btn.disabled = false;
@@ -2560,6 +2745,8 @@ async function saveSetupForm() {
 async function runSetupTest(buttonId, resultId, url, successMessage) {
   const btn = document.getElementById(buttonId);
   const result = document.getElementById(resultId);
+  clearFieldErrors(setupPanel);
+  document.getElementById('setupSaveResult').textContent = '';
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Testing...';
   if (result) result.textContent = 'Testing...';
@@ -2574,8 +2761,7 @@ async function runSetupTest(buttonId, resultId, url, successMessage) {
       if (result) result.textContent = successMessage + (data.preview ? ': ' + data.preview : '');
       showToast(successMessage);
     } else {
-      if (result) result.textContent = data.error || 'Test failed';
-      showToast('Test failed', 'error');
+      if (result) result.textContent = showFieldErrors(data, setupFieldId) || data.error || 'Test failed';
     }
   } catch (e) {
     if (result) result.textContent = e.message || 'Network error';
@@ -2702,7 +2888,7 @@ loadEpisodes();
 loadLogs(true);
 loadConfig().then(() => loadOnboardingStatus());
 loadSpotifyStatus();
-setInterval(loadStatus, 30000);
+setInterval(loadStatus, 2000);
 setInterval(loadEpisodes, 5000);
 setInterval(loadOnboardingStatus, 30000);
 setInterval(() => {

@@ -3,6 +3,7 @@ import { mergeConfigUpdate } from "../src/admin.js";
 import { ConfigValidationError } from "../src/config.js";
 import { createServer } from "../src/server.js";
 import { StateManager } from "../src/state.js";
+import { ImportRunner } from "../src/scheduler.js";
 import type { AppConfig } from "../src/types.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -161,7 +162,7 @@ describe("admin trigger", () => {
         const app = createServer(
             config,
             new StateManager(dataDir),
-            async () => {}
+            new ImportRunner()
         );
         const server = app.listen(0);
         servers.push(server);
@@ -202,9 +203,9 @@ describe("admin trigger", () => {
         const app = createServer(
             config,
             new StateManager(dataDir),
-            async () => {
+            new ImportRunner(async () => {
                 triggered = true;
-            }
+            })
         );
         const server = app.listen(0);
         servers.push(server);
@@ -236,6 +237,17 @@ describe("admin trigger", () => {
             token: "",
         });
 
+        const invalid = await fetch(`${baseUrl}/api/config`, {
+            method: "PUT",
+            headers: { Cookie: cookie ?? "", "Content-Type": "application/json" },
+            body: JSON.stringify({ server: { base_url: "invalid" }, feed: { title: "" } }),
+        });
+        expect(invalid.status).toBe(400);
+        expect((await invalid.json()).fieldErrors).toEqual({
+            "server.base_url": "This field must be an http(s) URL.",
+            "feed.title": "This field is required.",
+        });
+
         const trigger = await fetch(`${baseUrl}/api/trigger`, {
             method: "POST",
             headers: { Cookie: cookie ?? "" },
@@ -257,11 +269,16 @@ describe("feed access routes", () => {
         mkdirSync(join(dataDir, "audio"), { recursive: true });
         writeFileSync(join(dataDir, "audio", "test.mp3"), "audio");
 
-        const app = createServer(
-            config,
-            new StateManager(dataDir),
-            async () => {}
-        );
+        const state = new StateManager(dataDir);
+        state.addProcessed({
+            bookmarkId: "test-episode",
+            title: "Test Episode",
+            source: "example.com",
+            filename: "test.mp3",
+            duration: 1,
+            pubDate: "2026-01-01T00:00:00Z",
+        });
+        const app = createServer(config, state, new ImportRunner());
         const server = app.listen(0);
         servers.push(server);
         await new Promise<void>((resolve) => server.once("listening", resolve));
@@ -296,5 +313,27 @@ describe("feed access routes", () => {
         expect((await fetch(`${baseUrl}/audio/test.mp3`)).status).toBe(404);
         expect((await fetch(`${baseUrl}/wrongtoken123456/audio/test.mp3`)).status).toBe(404);
         expect((await fetch(`${baseUrl}/abc1234567890_xyz/audio/test.mp3`)).status).toBe(200);
+    });
+
+    it("streams a known episode to authenticated admins with range support", async () => {
+        const config = makeConfig();
+        config.feed_access = { enabled: true, token: "abc1234567890_xyz" };
+        const baseUrl = await startTestServer(config);
+        const audioUrl = `${baseUrl}/api/episodes/test-episode/audio`;
+        expect((await fetch(audioUrl)).status).toBe(401);
+
+        const login = await fetch(`${baseUrl}/api/admin/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: "secret" }),
+        });
+        const cookie = login.headers.get("set-cookie")?.split(";")[0] ?? "";
+        const range = await fetch(audioUrl, { headers: { Cookie: cookie, Range: "bytes=1-2" } });
+        expect(range.status).toBe(206);
+        expect(range.headers.get("content-type")).toContain("audio/mpeg");
+        expect(range.headers.get("cache-control")).toBe("private, no-store");
+        expect(await range.text()).toBe("ud");
+        expect((await fetch(`${baseUrl}/api/episodes/unknown/audio`, { headers: { Cookie: cookie } })).status).toBe(404);
+        expect((await fetch(`${baseUrl}/audio/test.mp3`)).status).toBe(404);
     });
 });

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { loadConfig } from "../src/config.js";
 import { createAdminRouter } from "../src/admin.js";
 import { StateManager } from "../src/state.js";
+import { ImportRunner } from "../src/scheduler.js";
 import { DEFAULT_OPENAI_TTS } from "../src/tts-config.js";
 import { TEST_MP3 } from "./tts-fixture.js";
 import { mp3AudioFrames } from "../src/mp3.js";
@@ -43,7 +44,9 @@ async function setup() {
     let changed = false;
     const app = express();
     app.use(express.json());
-    app.use(createAdminRouter(() => config, () => { changed = true; }, state, async () => { throw new Error("Preview must not trigger the pipeline"); }));
+    app.use(createAdminRouter(() => config, () => { changed = true; }, state, new ImportRunner(async () => {
+        throw new Error("Preview must not trigger the pipeline");
+    })));
     const base = await listen(app);
     const response = await fetch(`${base}/api/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password: "test-password" }) });
     const cookie = response.headers.get("set-cookie")?.split(";")[0] ?? "";
@@ -140,7 +143,15 @@ describe("voice preview admin API", () => {
         expect(preview.status).toBe(200);
         expect(Buffer.from(await preview.arrayBuffer())).toEqual(mp3AudioFrames(TEST_MP3));
         for (const text of ["", " ", "x".repeat(501)]) {
-            expect((await post(text)).status).toBe(400);
+            const invalid = await post(text);
+            expect(invalid.status).toBe(400);
+            expect((await invalid.json()).fieldErrors.text).toMatch(/1 and 500/);
         }
+        const invalidSettings = await fetch(`${admin.base}/api/tts/preview`, {
+            method: "POST", headers: { Cookie: admin.cookie, "Content-Type": "application/json" },
+            body: JSON.stringify({ text: "Hello", tts: { provider: "openai", openai: { model: "" } } }),
+        });
+        expect(invalidSettings.status).toBe(400);
+        expect((await invalidSettings.json()).fieldErrors["tts.openai.model"]).toMatch(/required/);
     }, 15_000);
 });
